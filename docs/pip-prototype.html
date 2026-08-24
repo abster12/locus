@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locus — in-tab viewer prototype</title>
+<!-- Three variants of an in-tab viewer, switchable via ?variant=, throwaway. -->
+<style>
+  :root {
+    --paper: #f1f2ef;
+    --card: #fcfdfb;
+    --ink: #17191b;
+    --mute: #6b7176;
+    --rule: #d8dbd5;
+    --wash: #e7e9e4;
+    --accent: #c8352e;
+    --src-x: #111111;
+    --src-instagram: #b0357c;
+    --src-youtube: #d42a20;
+    --src-reddit: #e2571e;
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --ui: "Avenir Next", Avenir, "Gill Sans", "Gill Sans MT", system-ui, sans-serif;
+    --mono: "SF Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+    --lift: 0 1px 2px rgba(20,24,28,.07), 0 5px 16px rgba(20,24,28,.06);
+  }
+  html { color-scheme: light; }
+  html[data-theme="dark"] { color-scheme: dark; }
+  html[data-theme="dark"] {
+    --paper: #0b0b0c; --card: #151619; --ink: #e9eaeb; --mute: #8f949a;
+    --rule: #2b2d31; --wash: #1d1f23; --accent: #ef6355; --src-x: #c9cdd2;
+    --lift: 0 1px 2px rgba(0,0,0,.5), 0 6px 18px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: var(--paper); font-family: var(--ui); -webkit-font-smoothing: antialiased; }
+  body::before { content: ""; position: fixed; inset: 0; background-image: var(--grain); pointer-events: none; z-index: 40; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .shell { max-width: 1180px; margin: 0 auto; padding: 28px 26px 120px; }
+  .wordmark { font-family: var(--display); font-size: 42px; line-height: .9; letter-spacing: -.03em; margin: 0; }
+  .wordmark::after { content: "."; color: var(--accent); }
+  .lede { margin: 8px 0 0; color: var(--mute); font-size: 13.5px; max-width: 62ch; }
+  .masthead { display: flex; justify-content: space-between; align-items: end; gap: 18px; border-bottom: 3px double var(--ink); padding-bottom: 14px; }
+  .proto-tag { font-family: var(--mono); font-size: 11px; color: var(--mute); letter-spacing: .06em; text-transform: uppercase; }
+  .how { margin: 16px 0 22px; padding: 12px 14px; background: var(--card); border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--lift); font-size: 13.5px; line-height: 1.5; color: var(--mute); max-width: 78ch; }
+  .how strong { color: var(--ink); font-weight: 600; }
+  .how code { font-family: var(--mono); font-size: 12px; }
+
+  .desk { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  .desk.split { grid-template-columns: 1fr 8px var(--pane, 50vw); align-items: start; gap: 0; }
+  .gutter {
+    cursor: col-resize; align-self: stretch; min-height: 40vh;
+    background: transparent; position: relative;
+  }
+  .gutter::after {
+    content: ""; position: absolute; top: 12px; bottom: 12px; left: 3px; width: 2px;
+    background: var(--rule); border-radius: 1px;
+  }
+  .gutter:hover::after, .gutter.drag::after { background: var(--accent); }
+  .wall { columns: 2 320px; column-gap: 14px; }
+  .desk.split .wall { columns: 1 280px; padding-right: 14px; }
+
+  .post {
+    break-inside: avoid; margin: 0 0 14px;
+    background: var(--card); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 14px 16px 12px; box-shadow: var(--lift); cursor: pointer;
+  }
+  .post.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .post h3 { font-family: var(--display); font-weight: 500; font-size: 19px; line-height: 1.25; margin: 8px 0 0; }
+  .byline { display: flex; align-items: center; gap: 10px; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--wash); font-family: var(--display); font-size: 15px; }
+  .handle { font-family: var(--mono); font-size: 12.5px; }
+  .by-date { font-size: 11.5px; color: var(--mute); }
+  .stamp { margin-left: auto; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--src, var(--ink)); }
+  .src-x { --src: var(--src-x); } .src-instagram { --src: var(--src-instagram); }
+  .src-youtube { --src: var(--src-youtube); } .src-reddit { --src: var(--src-reddit); }
+  .excerpt { margin: 7px 0 0; font-family: var(--display); font-size: 15.5px; line-height: 1.45; }
+  .media { margin-top: 10px; border-radius: 8px; overflow: hidden; height: 132px; background: var(--wash); display: grid; place-items: center; color: var(--mute); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; }
+  .media.photo { background: #c5c9c2; color: #3a3e42; }
+  .media.yt { background: #2a2c30; color: #f2f3f0; }
+  .media.poster { background: var(--pbg, #4053b3); color: #f2f3f0; font-family: var(--display); font-style: italic; font-size: 15px; text-transform: none; letter-spacing: 0; justify-content: start; align-items: end; padding: 10px 12px; }
+
+  /* A — half-tab stage, bottom-right, drag the top-left corner */
+  .stage {
+    position: fixed; right: 22px; bottom: 78px; z-index: 50;
+    width: 50vw; height: 50vh;
+    min-width: 320px; min-height: 280px;
+    max-width: calc(100vw - 32px); max-height: calc(100vh - 96px);
+    background: var(--card); border: 1px solid var(--rule); border-radius: 12px;
+    box-shadow: var(--lift), 0 18px 40px rgba(20,24,28,.12);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .grip {
+    position: absolute; top: 0; left: 0; width: 18px; height: 18px; z-index: 2;
+    cursor: nwse-resize;
+  }
+  .grip::before {
+    content: ""; position: absolute; top: 5px; left: 5px; width: 9px; height: 9px;
+    border-top: 1.5px solid var(--mute); border-left: 1.5px solid var(--mute);
+  }
+  .stage.hidden, .pane.hidden, .focus.hidden, .chip.hidden, .gutter.hidden { display: none; }
+
+  /* B — split blotter */
+  .pane {
+    position: sticky; top: 16px; z-index: 50;
+    background: var(--card); border: 1px solid var(--rule); border-radius: 12px;
+    box-shadow: var(--lift); display: flex; flex-direction: column;
+    max-height: calc(100vh - 40px); overflow: hidden;
+  }
+  .pane .empty-pane { padding: 36px 22px; color: var(--mute); font-family: var(--display); font-size: 20px; }
+
+  /* C — focus overlay + chip */
+  .focus {
+    position: fixed; inset: 0; z-index: 50;
+    background: color-mix(in srgb, var(--paper) 78%, transparent);
+    backdrop-filter: blur(4px);
+    display: grid; place-items: center; padding: 28px;
+  }
+  .focus-card {
+    position: relative;
+    width: 50vw; height: 50vh;
+    min-width: 320px; min-height: 280px;
+    max-width: calc(100vw - 56px); max-height: calc(100vh - 56px);
+    background: var(--card); border: 1px solid var(--rule); border-radius: 14px;
+    box-shadow: var(--lift), 0 24px 60px rgba(20,24,28,.18);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .focus-card .grip { top: auto; left: auto; right: 0; bottom: 0; cursor: nwse-resize; }
+  .focus-card .grip::before {
+    top: auto; left: auto; right: 5px; bottom: 5px;
+    border: 0; border-right: 1.5px solid var(--mute); border-bottom: 1.5px solid var(--mute);
+  }
+  .chip {
+    position: fixed; right: 22px; bottom: 78px; z-index: 50;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--card); border: 1px solid var(--rule); border-radius: 999px;
+    padding: 8px 10px 8px 8px; box-shadow: var(--lift); cursor: pointer;
+  }
+  .chip .dot { width: 36px; height: 36px; border-radius: 50%; background: var(--wash); display: grid; place-items: center; font-size: 11px; }
+  .chip .nm { font-family: var(--display); font-size: 14px; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip .sub { font-size: 11px; color: var(--mute); }
+
+  .vh { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+  .vh .who { min-width: 0; flex: 1; }
+  .vh .handle { display: block; }
+  .iconbtn {
+    width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--rule);
+    background: var(--card); color: var(--mute); display: grid; place-items: center; padding: 0;
+  }
+  .iconbtn:hover { color: var(--ink); border-color: var(--ink); }
+  .stage-body { overflow: auto; padding: 0 0 8px; flex: 1; min-height: 0; }
+  .stage-body.web { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  .wv { flex: 1; width: 100%; min-height: 240px; border: 0; background: #fff; }
+  html[data-theme="dark"] .wv { background: #111; }
+  .play, .playing, .shot {
+    aspect-ratio: 16 / 9; height: auto; max-height: 55%;
+    display: grid; place-items: center; width: 100%; border: 0;
+  }
+  .play {
+    background: #1b1c1f; color: #f2f3f0; gap: 8px;
+    font-family: var(--ui); letter-spacing: .08em; text-transform: uppercase; font-size: 11px;
+  }
+  .play .tri { width: 0; height: 0; border-style: solid; border-width: 10px 0 10px 16px; border-color: transparent transparent transparent #f2f3f0; }
+  .playing { background: #111; color: #c9cdd2; font-family: var(--mono); font-size: 12px; }
+  .shot { background: #c5c9c2; color: #3a3e42; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; }
+  .copy { padding: 12px 16px 4px; }
+  .copy h3 { font-family: var(--display); font-weight: 500; font-size: 20px; margin: 0 0 6px; }
+  .copy p { margin: 0; font-family: var(--display); font-size: 15.5px; line-height: 1.5; }
+  .copy a { color: var(--accent); overflow-wrap: anywhere; }
+  .copy .primary {
+    border: 1px solid var(--ink); background: var(--ink); color: var(--paper);
+    border-radius: 999px; padding: 5px 12px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .copy .meta { font-family: var(--mono); font-size: 11.5px; color: var(--mute); margin-bottom: 8px; }
+  .honest { margin-top: 10px; font-size: 12.5px; color: var(--mute); line-height: 1.45; }
+  .ai { border-top: 1px solid var(--rule); padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .ai-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ai button, .note-save {
+    border: 1px solid var(--rule); background: var(--card); border-radius: 999px;
+    padding: 4px 11px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink);
+  }
+  .ai button.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .ai button:disabled { opacity: .5; }
+  .prose { margin: 0; font-family: var(--display); font-size: 14.5px; line-height: 1.5; }
+  .note { width: 100%; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); padding: 8px 10px; resize: vertical; min-height: 52px; }
+  .state {
+    margin-top: 18px; font-family: var(--mono); font-size: 11px; color: var(--mute);
+    white-space: pre-wrap; border-top: 1px dashed var(--rule); padding-top: 10px;
+  }
+
+  .switcher {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 80;
+    display: flex; align-items: center; gap: 10px;
+    background: #17191b; color: #f2f3f0; border-radius: 999px; padding: 8px 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.28); font-size: 12.5px;
+  }
+  html[data-theme="dark"] .switcher { background: #e9eaeb; color: #17191b; }
+  .switcher button { border: 0; background: transparent; color: inherit; width: 28px; height: 28px; border-radius: 50%; }
+  .switcher button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+  .switcher .lab { min-width: 210px; text-align: center; letter-spacing: .02em; }
+  .switcher .lab small { display: block; opacity: .6; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (max-width: 860px) {
+    .desk.split { grid-template-columns: 1fr; }
+    .stage { left: 12px; right: 12px; width: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div>
+      <p class="wordmark">Locus</p>
+      <p class="lede">Throwaway. Click a card. Flip variants with ← → or the bar. Nothing here is wired to the real desk.</p>
+    </div>
+    <p class="proto-tag">in-tab viewer · prototype</p>
+  </header>
+  <p class="how" id="how"></p>
+  <div id="desk" class="desk">
+    <div id="wall" class="wall"></div>
+    <div id="gutter" class="gutter hidden" title="Drag to resize"></div>
+    <aside id="pane" class="pane hidden"></aside>
+  </div>
+  <div id="stage" class="stage hidden"></div>
+  <div id="focus" class="focus hidden"></div>
+  <div id="chip" class="chip hidden"></div>
+  <pre class="state" id="state"></pre>
+</div>
+<div class="switcher" id="switcher"></div>
+<script>
+const VARIANTS = {
+  A: { name: "Half-tab stage", blurb: "Opens at half the tab, parked bottom-right. Drag the ⌜ corner to resize. Desk stays usable." },
+  B: { name: "Split blotter", blurb: "Starts 50/50. Drag the gutter between desk and reader." },
+  C: { name: "Focus, then chip", blurb: "Half-tab card in the middle. Drag the ⌝ corner. Collapse keeps a chip." },
+};
+const ITEMS = [
+  { id: "yt1", kind: "yt", src: "youtube", handle: "@cookingwithkavita", date: "Yesterday",
+    title: "Crispy air-fryer paneer tikka — 12 minutes",
+    text: "",
+    summary: "A 12-minute paneer tikka: high heat, dry marinade, no crowding the basket. The save is a method, not a recipe dump." },
+  { id: "rd1", kind: "read", src: "x", handle: "@mipsytipsy", date: "Today",
+    title: null,
+    host: "lucumr.pocoo.org",
+    href: "https://lucumr.pocoo.org/",
+    text: "Everyone is arguing about whether LLMs can reason and nobody has defined reasoning. Ronacher’s piece is the clearest framing I’ve read: https://lucumr.pocoo.org/",
+    summary: "Ronacher’s working definition: reasoning is producing intermediate structure that can be checked, not fluent next-token talk. The public argument keeps collapsing those two." },
+  { id: "ig1", kind: "photo", src: "instagram", handle: "worktravelb", date: "Today",
+    title: "Barcelona, mapped",
+    text: "Explore Barcelona’s most incredible destinations — the full route, mapped.",
+    summary: "A photo-forward Barcelona route. Useful as a place to start, not a complete itinerary — the caption names the city, not the hours." },
+  { id: "ig2", kind: "reel", src: "instagram", handle: "fit_nomads_", date: "Aug 18",
+    title: "Steal this itinerary",
+    text: "6 weeks to first 10k, built around school-run hours.",
+    summary: "A short training plan. The reel itself often will not play inside Locus — official IG embeds are a postcard, not the app." },
+  { id: "x1", kind: "post", src: "x", handle: "@naval", date: "Aug 19",
+    title: null,
+    text: "The modern portfolio for a 27-year-old in India: index, skills, sleep. Thread breaking down each with numbers.",
+    summary: "Three-bucket advice — market index, skill compounding, sleep as infrastructure. Numbers are claimed, not shown in the captured text." },
+  { id: "yt2", kind: "yt", src: "youtube", handle: "@thecareerforce", date: "Aug 16",
+    title: "How to negotiate an off-cycle promotion (real scripts)",
+    text: "",
+    summary: "Scripts for asking off-cycle: lead with shipped work, name the scope change, ask for a date. Treat it as a calendar event, not a vibe." },
+];
+
+const STAMP = { x: "X", instagram: "IG", youtube: "YT", reddit: "RD" };
+const canned = {
+  yt: "Play here is an official YouTube embed. Public videos play. Your Google login is not involved.",
+  read: "X is already on disk. Click the blog link to open it in this same window.",
+  photo: "Captured photo we already stored. Instagram.com will not sit in a frame.",
+  reel: "Official IG /embed is a postcard. Reels often refuse to play. Captured still + ↗ is the honest fallback.",
+  post: "The text Locus already captured. A live X timeline cannot use your x.com login from this tab.",
+  article: "A live page in this window — same idea as a phone WebView. Some sites refuse to be framed; then only ↗ works.",
+};
+
+let variant = new URLSearchParams(location.search).get("variant") || "A";
+if (!VARIANTS[variant]) variant = "A";
+let selected = null;
+let playing = false;
+let prose = null;
+let note = "";
+let noteOpen = false;
+let collapsed = false; // C only
+let busy = false;
+let page = "item"; // item | article
+let sizeA = null; // {w,h} px, remembered while the page is open
+let sizeC = null;
+let paneW = null;
+
+function $(id) { return document.getElementById(id); }
+function setVariant(next) {
+  variant = next;
+  const u = new URL(location.href);
+  u.searchParams.set("variant", next);
+  history.replaceState(null, "", u);
+  collapsed = false;
+  render();
+}
+function openItem(item) {
+  if (selected?.id !== item.id) { playing = false; prose = null; note = ""; noteOpen = false; page = "item"; }
+  selected = item;
+  collapsed = false;
+  render();
+}
+function closeItem() {
+  selected = null; playing = false; prose = null; note = ""; noteOpen = false; collapsed = false; page = "item";
+  render();
+}
+function openArticle() {
+  page = "article"; prose = null;
+  render();
+}
+function backToItem() {
+  page = "item";
+  render();
+}
+function linkify(text) {
+  return text.replace(/https?:\/\/[^\s]+/g, (u) => `<a href="${u}" data-act="article">${u.replace(/^https?:\/\//, "")}</a>`);
+}
+
+function wallHtml() {
+  return ITEMS.map((it) => `
+    <article class="post src-${it.src}${selected?.id === it.id ? " on" : ""}" data-id="${it.id}">
+      <header class="byline">
+        <span class="avatar">${it.handle.replace(/^@/, "").charAt(0).toUpperCase()}</span>
+        <div>
+          <div class="handle">${it.handle}</div>
+          <div class="by-date">${it.date}</div>
+        </div>
+        <span class="stamp">${STAMP[it.src]}</span>
+      </header>
+      ${it.title ? `<h3>${it.title}</h3>` : ""}
+      ${it.text ? `<p class="excerpt">${it.text}</p>` : ""}
+      ${mediaChip(it)}
+    </article>`).join("");
+}
+function mediaChip(it) {
+  if (it.kind === "yt") return `<div class="media yt">▶ captured video</div>`;
+  if (it.kind === "photo") return `<div class="media photo">captured photo</div>`;
+  if (it.kind === "reel") return `<div class="media yt">▶ reel</div>`;
+  if (it.kind === "read") return `<div class="media poster" style="--pbg:#4053b3">essay</div>`;
+  return `<div class="media poster" style="--pbg:#a8861f">thread</div>`;
+}
+
+function viewerInner(it) {
+  if (page === "article" && it.href) return articleInner(it);
+  const play = it.kind === "yt"
+    ? (playing
+        ? `<iframe class="wv" style="min-height:0;aspect-ratio:16/9;max-height:55%;flex:none" src="https://www.youtube-nocookie.com/embed/jNQXAC9IVRw?rel=0" title="YouTube" allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`
+        : `<button type="button" class="play" data-act="play"><span class="tri"></span>Play here · official YouTube embed</button>`)
+    : it.kind === "photo"
+      ? `<div class="shot">captured photo</div>`
+      : it.kind === "reel"
+        ? `<iframe class="wv" style="min-height:0;aspect-ratio:9/16;max-height:55%;flex:none" src="https://www.instagram.com/reel/embed/" title="Instagram"></iframe>`
+        : "";
+  return `
+    <header class="vh">
+      <div class="who">
+        <span class="handle">${it.handle}</span>
+        <span class="by-date">${STAMP[it.src]} · ${it.date}</span>
+      </div>
+      ${variant === "C" && !collapsed ? `<button class="iconbtn" data-act="collapse" title="Keep as chip">–</button>` : ""}
+      <a class="iconbtn" href="#" data-act="orig" title="Open original">↗</a>
+      <button class="iconbtn" data-act="close" title="Close">×</button>
+    </header>
+    <div class="stage-body">
+      ${play}
+      <div class="copy">
+        ${it.title ? `<h3>${it.title}</h3>` : ""}
+        ${it.text ? `<p>${linkify(it.text)}</p>` : ""}
+        ${it.href ? `<p class="honest">The X post is local. The blog is not — click the link to open it here.</p>` : `<p class="honest">${canned[it.kind]}</p>`}
+      </div>
+    </div>
+    ${aiBar()}`;
+}
+
+function articleInner(it) {
+  return `
+    <header class="vh">
+      <button class="iconbtn" data-act="back" title="Back to the save">←</button>
+      <div class="who">
+        <span class="handle">${it.host}</span>
+        <span class="by-date">live page</span>
+      </div>
+      <a class="iconbtn" href="#" data-act="orig" title="Open original">↗</a>
+      <button class="iconbtn" data-act="close" title="Close">×</button>
+    </header>
+    <div class="stage-body web">
+      <iframe class="wv" src="${it.href}" title="${it.host}"></iframe>
+    </div>
+    ${aiBar()}`;
+}
+
+function aiBar() {
+  return `<div class="ai">
+      <div class="ai-row">
+        <button type="button" class="primary" data-act="summary" ${busy ? "disabled" : ""}>${busy ? "Summarizing…" : prose ? "Again" : "Summary"}</button>
+        <button type="button" data-act="note">${noteOpen || note ? "Note" : "Add note"}</button>
+      </div>
+      ${prose ? `<p class="prose">${prose}</p>` : ""}
+      ${noteOpen || note ? `<textarea class="note" placeholder="A note stays on this machine.">${note}</textarea>` : ""}
+    </div>`;
+}
+
+function bindViewer(root) {
+  root.querySelector("[data-act=close]")?.addEventListener("click", closeItem);
+  root.querySelector("[data-act=back]")?.addEventListener("click", backToItem);
+  root.querySelector("[data-act=article]")?.addEventListener("click", (e) => { e.preventDefault(); openArticle(); });
+  root.querySelector("[data-act=collapse]")?.addEventListener("click", () => { collapsed = true; render(); });
+  root.querySelector("[data-act=play]")?.addEventListener("click", () => { playing = true; render(); });
+  root.querySelector("[data-act=orig]")?.addEventListener("click", (e) => { e.preventDefault(); alert("Would open the original in a new tab. ↗ stays."); });
+  root.querySelector("[data-act=summary]")?.addEventListener("click", () => {
+    busy = true; render();
+    setTimeout(() => { prose = selected.summary; busy = false; render(); }, 450);
+  });
+  root.querySelector("[data-act=note]")?.addEventListener("click", () => { noteOpen = true; render(); root.querySelector(".note")?.focus(); });
+  root.querySelector(".note")?.addEventListener("input", (e) => { note = e.target.value; dump(); });
+}
+
+function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+function bindBoxResize(el, get, set, { from }) {
+  const grip = document.createElement("div");
+  grip.className = "grip";
+  grip.title = "Drag to resize";
+  el.appendChild(grip);
+  const sz = get();
+  if (sz) { el.style.width = sz.w + "px"; el.style.height = sz.h + "px"; }
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const r = el.getBoundingClientRect();
+    const x0 = e.clientX, y0 = e.clientY, w0 = r.width, h0 = r.height;
+    const move = (ev) => {
+      const dw = from === "tl" ? x0 - ev.clientX : ev.clientX - x0;
+      const dh = from === "tl" ? y0 - ev.clientY : ev.clientY - y0;
+      const next = {
+        w: clamp(w0 + dw, 320, innerWidth - 32),
+        h: clamp(h0 + dh, 280, innerHeight - 72),
+      };
+      set(next);
+      el.style.width = next.w + "px";
+      el.style.height = next.h + "px";
+      dump();
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+  });
+}
+
+function bindGutter() {
+  const g = $("gutter");
+  const desk = $("desk");
+  if (paneW) desk.style.setProperty("--pane", paneW + "px");
+  else desk.style.setProperty("--pane", "50vw");
+  g.onpointerdown = (e) => {
+    e.preventDefault();
+    g.setPointerCapture(e.pointerId);
+    g.classList.add("drag");
+    const move = (ev) => {
+      paneW = clamp(innerWidth - ev.clientX - 26, 280, innerWidth - 280);
+      desk.style.setProperty("--pane", paneW + "px");
+      dump();
+    };
+    const up = () => {
+      g.classList.remove("drag");
+      g.removeEventListener("pointermove", move);
+      g.removeEventListener("pointerup", up);
+    };
+    g.addEventListener("pointermove", move);
+    g.addEventListener("pointerup", up);
+  };
+}
+
+function render() {
+  $("how").innerHTML = `<strong>${variant} — ${VARIANTS[variant].name}.</strong> ${VARIANTS[variant].blurb} Click any card. Esc closes.`;
+  $("desk").className = "desk" + (variant === "B" ? " split" : "");
+  $("wall").innerHTML = wallHtml();
+  $("wall").querySelectorAll(".post").forEach((el) => {
+    el.addEventListener("click", () => openItem(ITEMS.find((i) => i.id === el.dataset.id)));
+  });
+
+  const stage = $("stage"), pane = $("pane"), focus = $("focus"), chip = $("chip"), gutter = $("gutter");
+  stage.classList.add("hidden"); pane.classList.add("hidden"); focus.classList.add("hidden"); chip.classList.add("hidden"); gutter.classList.add("hidden");
+
+  if (variant === "A") {
+    if (selected) {
+      stage.classList.remove("hidden");
+      stage.innerHTML = viewerInner(selected);
+      bindViewer(stage);
+      bindBoxResize(stage, () => sizeA, (s) => { sizeA = s; }, { from: "tl" });
+    }
+  } else if (variant === "B") {
+    pane.classList.remove("hidden");
+    gutter.classList.remove("hidden");
+    bindGutter();
+    if (selected) { pane.innerHTML = viewerInner(selected, { wide: true }); bindViewer(pane); }
+    else pane.innerHTML = `<p class="empty-pane">Pick a save. It stays here while you keep moving down the blotter.</p>`;
+  } else if (variant === "C") {
+    if (selected && collapsed) {
+      chip.classList.remove("hidden");
+      chip.innerHTML = `<span class="dot">${playing ? "▶" : STAMP[selected.src]}</span><span><span class="nm">${selected.title || selected.text.slice(0, 40)}</span><br><span class="sub">${playing ? "playing · click to return" : "click to return"}</span></span>`;
+      chip.onclick = () => { collapsed = false; render(); };
+    } else if (selected) {
+      focus.classList.remove("hidden");
+      focus.innerHTML = `<div class="focus-card">${viewerInner(selected, { wide: true })}</div>`;
+      const card = focus.querySelector(".focus-card");
+      bindViewer(focus);
+      bindBoxResize(card, () => sizeC, (s) => { sizeC = s; }, { from: "br" });
+      focus.onclick = (e) => { if (e.target === focus) closeItem(); };
+    }
+  }
+
+  $("switcher").innerHTML = `
+    <button type="button" id="prev" aria-label="Previous variant">←</button>
+    <div class="lab">${variant} — ${VARIANTS[variant].name}<small>prototype · not the desk</small></div>
+    <button type="button" id="next" aria-label="Next variant">→</button>`;
+  const keys = Object.keys(VARIANTS);
+  const i = keys.indexOf(variant);
+  $("prev").onclick = () => setVariant(keys[(i + keys.length - 1) % keys.length]);
+  $("next").onclick = () => setVariant(keys[(i + 1) % keys.length]);
+  dump();
+}
+
+function dump() {
+  $("state").textContent = JSON.stringify({
+    variant, item: selected?.id ?? null, page, playing, summarized: Boolean(prose), note: note.slice(0, 40), collapsed,
+    size: variant === "B" ? paneW : variant === "C" ? sizeC : sizeA,
+  }, null, 2);
+}
+
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (e.key === "Escape") { closeItem(); return; }
+  if (e.key === "ArrowLeft") { $("prev")?.click(); }
+  if (e.key === "ArrowRight") { $("next")?.click(); }
+});
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font: 13px/1.4 "Avenir Next", sans-serif; width: 280px; margin: 12px; color: #241c16; background: #efe4d0; }
+      input, button { width: 100%; margin: 4px 0; }
+      .quiet { color: #6d5c4c; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <strong>Locus</strong>
+    <p id="hint" class="quiet">Pairs with the desk by itself. Connect on Sources opens the saved page here — you only log in if the site asks.</p>
+    <div id="manual">
+      <input id="origin" placeholder="http://127.0.0.1:8787" />
+      <input id="token" placeholder="capture token (only if auto-pair failed)" />
+      <button id="savePair">Save pairing</button>
+    </div>
+    <button id="saveItem">Save this item</button>
+    <button id="importPage">Import this page</button>
+    <p id="status" class="quiet"></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,499 @@
+import { createHash } from "node:crypto";
+import type { Db } from "../../db/open.ts";
+import { newId, nowIso, tx } from "../../db/open.ts";
+import { RejectedPayload } from "../../core/sanitize.ts";
+import { isSourceId, type SourceId } from "../../core/types.ts";
+import type { CaptureBatchV1, CaptureFinishV1, CaptureSessionV1 } from "../../packages/protocol/types.ts";
+
+export function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export function issueToken(db: Db, source: SourceId | "*", accountId: string | null): { token: string; tokenId: string } {
+  const token = `loc_${crypto.randomUUID().replaceAll("-", "")}`;
+  const tokenId = newId();
+  db.prepare(
+    `INSERT INTO capture_tokens (id, token_hash, source, source_account_id, capabilities, created_at)
+     VALUES (?, ?, ?, ?, 'ingest', ?)`,
+  ).run(tokenId, hashToken(token), source, accountId, nowIso());
+  return { token, tokenId };
+}
+
+export function isThinBody(body: string | null | undefined): boolean {
+  if (!body) return true;
+  const t = body.trim();
+  return t.length === 0 || /^https?:\/\/\S+$/i.test(t);
+}
+
+export function knownCompleteIds(db: Db, source: string, accountId: string | null): string[] {
+  const rows = (
+    accountId
+      ? db
+          .prepare(
+            `SELECT sr.external_id as id, i.body as body FROM source_records sr
+             JOIN items i ON i.id = sr.item_id WHERE sr.source_account_id = ?`,
+          )
+          .all(accountId)
+      : source === "*"
+        ? db
+            .prepare(
+              `SELECT sr.external_id as id, i.body as body FROM source_records sr
+               JOIN items i ON i.id = sr.item_id`,
+            )
+            .all()
+        : db
+            .prepare(
+              `SELECT sr.external_id as id, i.body as body FROM source_records sr
+               JOIN source_accounts sa ON sa.id = sr.source_account_id
+               JOIN items i ON i.id = sr.item_id WHERE sa.source = ?`,
+            )
+            .all(source)
+  ) as { id: string; body: string | null }[];
+  return rows.filter((r) => !isThinBody(r.body)).map((r) => r.id);
+}
+
+export function lookupToken(
+  db: Db,
+  token: string,
+): { id: string; source: string; sourceAccountId: string | null; revokedAt: string | null } | null {
+  const row = db.prepare(`SELECT id, source, source_account_id as sourceAccountId, revoked_at as revokedAt FROM capture_tokens WHERE token_hash = ?`).get(
+    hashToken(token),
+  ) as { id: string; source: string; sourceAccountId: string | null; revokedAt: string | null } | undefined;
+  return row ?? null;
+}
+
+export function revokeTokensForAccount(db: Db, accountId: string): void {
+  db.prepare(`UPDATE capture_tokens SET revoked_at = ? WHERE source_account_id = ? AND revoked_at IS NULL`).run(
+    nowIso(),
+    accountId,
+  );
+}
+
+export function revokeTokenById(db: Db, tokenId: string): void {
+  db.prepare(`UPDATE capture_tokens SET revoked_at = ? WHERE id = ?`).run(nowIso(), tokenId);
+}
+
+function isPlaceholderAccount(externalId: string): boolean {
+  return (
+    !externalId ||
+    externalId === "extension" ||
+    externalId === "pending" ||
+    externalId.startsWith("pending:") ||
+    externalId === "unknown"
+  );
+}
+
+function ensureAccount(
+  db: Db,
+  source: string,
+  externalId: string,
+  boundAccountId: string | null,
+): string {
+  if (boundAccountId) {
+    const existing = db.prepare(`SELECT id, external_id FROM source_accounts WHERE id = ?`).get(boundAccountId) as
+      | { id: string; external_id: string }
+      | undefined;
+    if (!existing) throw new RejectedPayload("token is bound to a missing account");
+    if (isPlaceholderAccount(existing.external_id)) {
+      if (!isPlaceholderAccount(externalId)) {
+        db.prepare(`UPDATE source_accounts SET external_id = ?, display_name = COALESCE(display_name, ?) WHERE id = ?`).run(
+          externalId,
+          externalId,
+          existing.id,
+        );
+      }
+      return existing.id;
+    }
+    // Token already names the account. Ignore producer-supplied ids like "extension".
+    return existing.id;
+  }
+  const found = db.prepare(`SELECT id FROM source_accounts WHERE source = ? AND external_id = ?`).get(source, externalId) as
+    | { id: string }
+    | undefined;
+  if (found) return found.id;
+  const id = newId();
+  db.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+    id,
+    source,
+    externalId,
+    externalId,
+    nowIso(),
+  );
+  return id;
+}
+
+function ensureCollection(
+  db: Db,
+  accountId: string,
+  externalId: string,
+  name: string | undefined,
+  url: string | undefined,
+): string {
+  const found = db
+    .prepare(`SELECT id FROM source_collections WHERE source_account_id = ? AND external_id = ?`)
+    .get(accountId, externalId) as { id: string } | undefined;
+  if (found) {
+    if (name) db.prepare(`UPDATE source_collections SET name = COALESCE(?, name), url = COALESCE(?, url) WHERE id = ?`).run(name, url ?? null, found.id);
+    return found.id;
+  }
+  const id = newId();
+  db.prepare(
+    `INSERT INTO source_collections (id, source_account_id, external_id, name, url, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(id, accountId, externalId, name || externalId, url ?? null, nowIso());
+  return id;
+}
+
+export function startSession(
+  db: Db,
+  token: { id: string; source: string; sourceAccountId: string | null },
+  session: CaptureSessionV1,
+): { sessionId: string; captureRunId: string } {
+  const sessionSource = session.source.startsWith("custom:") ? session.source : session.source;
+  if (token.source !== "*" && token.source !== sessionSource) {
+    throw new RejectedPayload("token is not valid for this source");
+  }
+  const source = token.source === "*" ? sessionSource : token.source;
+  return tx(db, () => {
+    const accountId = ensureAccount(db, source, session.accountExternalId, token.sourceAccountId);
+    const collectionId = ensureCollection(
+      db,
+      accountId,
+      session.collection.externalId,
+      session.collection.name,
+      session.collection.url,
+    );
+    const captureRunId = newId();
+    const sessionId = newId();
+    db.prepare(
+      `INSERT INTO capture_runs (
+        id, source_collection_id, producer_id, producer_version, started_at, status
+      ) VALUES (?, ?, ?, ?, ?, 'running')`,
+    ).run(captureRunId, collectionId, session.producer.id, session.producer.version, nowIso());
+    db.prepare(
+      `INSERT INTO capture_sessions (
+        id, token_id, source, source_account_id, source_collection_id, producer_id, producer_version,
+        mode, observed_at, capture_run_id, account_external_id, collection_external_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      sessionId,
+      token.id,
+      source,
+      accountId,
+      collectionId,
+      session.producer.id,
+      session.producer.version,
+      session.mode,
+      session.observedAt,
+      captureRunId,
+      session.accountExternalId,
+      session.collection.externalId,
+    );
+    return { sessionId, captureRunId };
+  });
+}
+
+function upsertItem(
+  db: Db,
+  args: {
+    accountId: string;
+    collectionId: string;
+    captureRunId: string;
+    observedAt: string;
+    change: Extract<CaptureBatchV1["changes"][number], { kind: "upsert" }>;
+    activityKind: "detected" | "captured" | "imported";
+  },
+): "inserted" | "updated" {
+  const { change } = args;
+  const existing = db
+    .prepare(`SELECT id, item_id FROM source_records WHERE source_account_id = ? AND external_id = ?`)
+    .get(args.accountId, change.externalId) as { id: string; item_id: string | null } | undefined;
+
+  const draft = change.item;
+  const publishedAt = draft.publishedAt?.trim() || null;
+  const sourceSavedAt = draft.sourceSavedAt?.trim() || null;
+  if (existing?.item_id) {
+    const prev = db.prepare(`SELECT body FROM items WHERE id = ?`).get(existing.item_id) as { body: string | null } | undefined;
+    db.prepare(
+      `UPDATE items SET content_type = ?, title = ?, body = ?, url = ?, author_name = ?, author_handle = ?,
+        published_at = COALESCE(?, published_at), source_saved_at = COALESCE(?, source_saved_at),
+        captured_at = ?, media = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+      draft.contentType,
+      draft.title ?? null,
+      mergeKeptUrls(draft.body ?? null, prev?.body ?? null),
+      draft.url,
+      draft.authorName ?? null,
+      draft.authorHandle ?? null,
+      publishedAt,
+      sourceSavedAt,
+      args.observedAt,
+      JSON.stringify(draft.media ?? []),
+      nowIso(),
+      existing.item_id,
+    );
+    db.prepare(
+      `UPDATE source_records SET revision = ?, last_observed_at = ?, source_position = ?, metadata = ?, item_id = ? WHERE id = ?`,
+    ).run(
+      change.revision ?? null,
+      args.observedAt,
+      change.sourcePosition ?? null,
+      change.metadata ? JSON.stringify(change.metadata) : null,
+      existing.item_id,
+      existing.id,
+    );
+    db.prepare(
+      `INSERT OR IGNORE INTO source_memberships (source_collection_id, source_record_id, source_position) VALUES (?, ?, ?)`,
+    ).run(args.collectionId, existing.id, change.sourcePosition ?? null);
+    db.prepare(`INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, 'updated', ?, 'locus', ?)`).run(
+      newId(),
+      existing.item_id,
+      args.observedAt,
+      args.captureRunId,
+    );
+    return "updated";
+  }
+
+  const itemId = newId();
+  const recordId = existing?.id ?? newId();
+  db.prepare(
+    `INSERT INTO items (
+      id, content_type, title, body, url, author_name, author_handle, published_at, source_saved_at,
+      first_observed_at, captured_at, media, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    itemId,
+    draft.contentType,
+    draft.title ?? null,
+    draft.body ?? null,
+    draft.url,
+    draft.authorName ?? null,
+    draft.authorHandle ?? null,
+    publishedAt,
+    sourceSavedAt,
+    args.observedAt,
+    args.observedAt,
+    JSON.stringify(draft.media ?? []),
+    nowIso(),
+    nowIso(),
+  );
+  db.prepare(
+    `INSERT INTO item_state (item_id, status, snoozed_until, updated_at) VALUES (?, 'inbox', NULL, ?)`,
+  ).run(itemId, nowIso());
+  if (existing) {
+    db.prepare(`UPDATE source_records SET item_id = ?, last_observed_at = ?, revision = ?, source_position = ? WHERE id = ?`).run(
+      itemId,
+      args.observedAt,
+      change.revision ?? null,
+      change.sourcePosition ?? null,
+      existing.id,
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO source_records (
+        id, source_account_id, external_id, revision, item_id, first_observed_at, last_observed_at, source_position, metadata
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      recordId,
+      args.accountId,
+      change.externalId,
+      change.revision ?? null,
+      itemId,
+      args.observedAt,
+      args.observedAt,
+      change.sourcePosition ?? null,
+      change.metadata ? JSON.stringify(change.metadata) : null,
+    );
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO source_memberships (source_collection_id, source_record_id, source_position) VALUES (?, ?, ?)`,
+  ).run(args.collectionId, recordId, change.sourcePosition ?? null);
+  db.prepare(
+    `INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, ?, ?, 'locus', ?)`,
+  ).run(newId(), itemId, args.activityKind, args.observedAt, args.captureRunId);
+  return "inserted";
+}
+
+export function ingestBatch(
+  db: Db,
+  batch: CaptureBatchV1,
+  opts?: { activityKind?: "detected" | "captured" | "imported" },
+): { replayed: boolean; upserted: number; removed: number } {
+  return tx(db, () => {
+    const session = db
+      .prepare(
+        `SELECT * FROM capture_sessions WHERE id = ?`,
+      )
+      .get(batch.sessionId) as
+      | {
+          id: string;
+          source_account_id: string;
+          source_collection_id: string;
+          capture_run_id: string;
+          last_sequence: number;
+          finished_at: string | null;
+          observed_at: string;
+        }
+      | undefined;
+    if (!session) throw new RejectedPayload("unknown session");
+    if (session.finished_at) throw new RejectedPayload("session already finished");
+
+    const prior = db
+      .prepare(`SELECT sequence FROM capture_batches WHERE idempotency_key = ?`)
+      .get(batch.idempotencyKey) as { sequence: number } | undefined;
+    if (prior) {
+      return { replayed: true, upserted: 0, removed: 0 };
+    }
+
+    if (batch.sequence !== session.last_sequence + 1) {
+      throw new RejectedPayload(`unexpected sequence ${batch.sequence}, expected ${session.last_sequence + 1}`);
+    }
+
+    let upserted = 0;
+    let removed = 0;
+    for (const change of batch.changes) {
+      if (change.kind === "upsert") {
+        const result = upsertItem(db, {
+          accountId: session.source_account_id,
+          collectionId: session.source_collection_id,
+          captureRunId: session.capture_run_id,
+          observedAt: session.observed_at,
+          change,
+          activityKind: opts?.activityKind ?? "captured",
+        });
+        if (result === "inserted") upserted += 1;
+        db.prepare(`INSERT OR IGNORE INTO capture_seen (capture_run_id, external_id) VALUES (?, ?)`).run(
+          session.capture_run_id,
+          change.externalId,
+        );
+      } else {
+        db.prepare(`INSERT OR IGNORE INTO capture_seen (capture_run_id, external_id) VALUES (?, ?)`).run(
+          session.capture_run_id,
+          change.externalId,
+        );
+        removed += applyRemove(db, session, change.externalId, change.observedAt);
+      }
+    }
+
+    db.prepare(`INSERT INTO capture_batches (session_id, sequence, idempotency_key) VALUES (?, ?, ?)`).run(
+      batch.sessionId,
+      batch.sequence,
+      batch.idempotencyKey,
+    );
+    db.prepare(`UPDATE capture_sessions SET last_sequence = ? WHERE id = ?`).run(batch.sequence, batch.sessionId);
+    db.prepare(
+      `UPDATE capture_runs SET last_sequence = ?, seen_count = seen_count + ?, upserted_count = upserted_count + ?,
+        removed_count = removed_count + ?, checkpoint = ? WHERE id = ?`,
+    ).run(
+      batch.sequence,
+      batch.changes.length,
+      upserted,
+      removed,
+      JSON.stringify({ sequence: batch.sequence, idempotencyKey: batch.idempotencyKey }),
+      session.capture_run_id,
+    );
+    return { replayed: false, upserted, removed };
+  });
+}
+
+function applyRemove(
+  db: Db,
+  session: { source_account_id: string; source_collection_id: string; capture_run_id: string },
+  externalId: string,
+  observedAt: string,
+): number {
+  const record = db
+    .prepare(`SELECT id, item_id FROM source_records WHERE source_account_id = ? AND external_id = ?`)
+    .get(session.source_account_id, externalId) as { id: string; item_id: string | null } | undefined;
+  if (!record) return 0;
+  db.prepare(`DELETE FROM source_memberships WHERE source_collection_id = ? AND source_record_id = ?`).run(
+    session.source_collection_id,
+    record.id,
+  );
+  if (record.item_id) {
+    db.prepare(
+      `INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, 'source_removed', ?, 'source', ?)`,
+    ).run(newId(), record.item_id, observedAt, session.capture_run_id);
+  }
+  return 1;
+}
+
+export function finishSession(db: Db, finish: CaptureFinishV1): { removed: number } {
+  return tx(db, () => {
+    const session = db.prepare(`SELECT * FROM capture_sessions WHERE id = ?`).get(finish.sessionId) as
+      | {
+          id: string;
+          source_account_id: string;
+          source_collection_id: string;
+          capture_run_id: string;
+          finished_at: string | null;
+        }
+      | undefined;
+    if (!session) throw new RejectedPayload("unknown session");
+    if (session.finished_at) return { removed: 0 };
+
+    let removed = 0;
+    if (finish.coverage === "complete") {
+      const stale = db
+        .prepare(
+          `SELECT sm.source_record_id, sr.external_id, sr.item_id
+           FROM source_memberships sm
+           JOIN source_records sr ON sr.id = sm.source_record_id
+           WHERE sm.source_collection_id = ?
+             AND sr.external_id NOT IN (SELECT external_id FROM capture_seen WHERE capture_run_id = ?)`,
+        )
+        .all(session.source_collection_id, session.capture_run_id) as {
+        source_record_id: string;
+        external_id: string;
+        item_id: string | null;
+      }[];
+      for (const row of stale) {
+        removed += applyRemove(
+          db,
+          session,
+          row.external_id,
+          nowIso(),
+        );
+      }
+    }
+
+    db.prepare(`UPDATE capture_sessions SET finished_at = ?, coverage = ? WHERE id = ?`).run(
+      nowIso(),
+      finish.coverage,
+      finish.sessionId,
+    );
+    db.prepare(
+      `UPDATE capture_runs SET finished_at = ?, coverage = ?, status = 'ok', removed_count = removed_count + ?, checkpoint = ? WHERE id = ?`,
+    ).run(
+      nowIso(),
+      finish.coverage,
+      removed,
+      finish.cursor ? JSON.stringify(finish.cursor) : null,
+      session.capture_run_id,
+    );
+    return { removed };
+  });
+}
+
+export function failRun(db: Db, captureRunId: string, code: string, detail: string): void {
+  db.prepare(
+    `UPDATE capture_runs SET finished_at = ?, status = 'error', coverage = COALESCE(coverage, 'partial'), error_code = ?, error_detail = ? WHERE id = ?`,
+  ).run(nowIso(), code, detail, captureRunId);
+}
+
+function mergeKeptUrls(incoming: string | null, previous: string | null): string | null {
+  const next = incoming?.trim() || "";
+  const prev = previous?.trim() || "";
+  if (!next) return prev || null;
+  if (!prev) return next;
+  let out = next;
+  for (const u of prev.match(/https?:\/\/[^\s]+/g) ?? []) {
+    if (!out.includes(u)) out += `\n${u}`;
+  }
+  return out;
+}
+
+export function cancelRun(db: Db, captureRunId: string): void {
+  db.prepare(
+    `UPDATE capture_runs SET finished_at = ?, status = 'cancelled', coverage = 'partial', error_code = 'interrupted', error_detail = 'stopped by user' WHERE id = ? AND finished_at IS NULL`,
+  ).run(nowIso(), captureRunId);
+}

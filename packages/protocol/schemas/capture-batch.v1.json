@@ -1,0 +1,45 @@
+{
+  "$id": "https://locus.local/protocol/capture-batch.v1.json",
+  "title": "CaptureBatchV1",
+  "type": "object",
+  "required": ["sessionId", "sequence", "idempotencyKey", "changes"],
+  "properties": {
+    "sessionId": { "type": "string" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "idempotencyKey": { "type": "string" },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["kind", "externalId", "item"],
+            "properties": {
+              "kind": { "const": "upsert" },
+              "externalId": { "type": "string" },
+              "item": {
+                "type": "object",
+                "required": ["contentType", "url"],
+                "properties": {
+                  "contentType": { "enum": ["post", "thread", "reel", "video", "comment", "link"] },
+                  "url": { "type": "string", "pattern": "^https?://" }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["kind", "externalId", "observedAt"],
+            "properties": {
+              "kind": { "const": "remove" },
+              "externalId": { "type": "string" },
+              "observedAt": { "type": "string" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

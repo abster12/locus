@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Locus capture",
+  "version": "0.1.0",
+  "description": "Save the current post into a local Locus desk. Secondary path to the headed runner.",
+  "action": {
+    "default_title": "Save to Locus",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "sw.js",
+    "type": "module"
+  },
+  "permissions": ["scripting", "storage", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://www.instagram.com/*"
+  ]
+}
