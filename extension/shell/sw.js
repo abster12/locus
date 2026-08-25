@@ -1,5 +1,6 @@
 import { detectListState, extractCurrent, extractPage } from "./extract.js";
 
+let listening = false;
 chrome.runtime.onInstalled.addListener(() => {
   listen();
 });
@@ -101,8 +102,6 @@ async function ensurePaired() {
   await chrome.storage.local.set({ origin: data.origin || origin, token: data.token });
   return { origin: data.origin || origin, token: data.token };
 }
-
-let listening = false;
 
 async function listen() {
   if (listening) return;

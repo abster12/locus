@@ -106,30 +106,26 @@ export async function extractPage() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const cards = [];
   if (/x\.com|twitter\.com/.test(url)) {
-    if (!/\/i\/(bookmarks|history)|\/status\//.test(url) && !document.querySelector('article[data-testid="tweet"]')) {
-      return null;
-    }
+    if (!/\/i\/(bookmarks|history)/.test(url)) return null;
     const takeX = () => {
       for (const el of document.querySelectorAll('article[data-testid="tweet"]')) {
         const card = readXTweet(el);
         if (card && !cards.some((c) => c.externalId === card.externalId)) cards.push(card);
       }
     };
-    if (/\/i\/(bookmarks|history)/.test(url)) {
-      const first = document.querySelector('article[data-testid="tweet"]');
-      const box = first ? scrollerOf(first) : document.scrollingElement || document.documentElement;
-      let last = 0;
-      let stagnant = 0;
-      for (let i = 0; i < 200 && stagnant < 8; i++) {
-        takeX();
-        if (cards.length <= last) stagnant += 1;
-        else stagnant = 0;
-        last = cards.length;
-        box.scrollTop = box.scrollHeight;
-        window.scrollTo(0, document.body.scrollHeight);
-        await sleep(650);
-      }
-    } else takeX();
+    const first = document.querySelector('article[data-testid="tweet"]');
+    const box = first ? scrollerOf(first) : document.scrollingElement || document.documentElement;
+    let last = 0;
+    let stagnant = 0;
+    for (let i = 0; i < 200 && stagnant < 8; i++) {
+      takeX();
+      if (cards.length <= last) stagnant += 1;
+      else stagnant = 0;
+      last = cards.length;
+      box.scrollTop = box.scrollHeight;
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleep(650);
+    }
     return { source: "x", collection: "bookmarks", collectionName: "Bookmarks", cards };
   }
   if (/youtube\.com\/playlist/.test(url)) {
@@ -162,6 +158,7 @@ export async function extractPage() {
     return { source: "youtube", collection: list, collectionName: list === "WL" ? "Watch Later" : "Playlist", cards };
   }
   if (/reddit\.com/.test(url)) {
+    if (!/reddit\.com\/(user\/[^/]+\/saved|saved\/?(\?|$))/.test(url)) return null;
     const takeRd = () => {
       for (const el of document.querySelectorAll("shreddit-post")) {
         const id = el.getAttribute("id") || "";
@@ -207,24 +204,23 @@ export async function extractPage() {
         });
       }
     };
-    if (/reddit\.com\/(user\/[^/]+\/saved|saved\/?(\?|$))/.test(url)) {
-      const first = document.querySelector("shreddit-post, shreddit-profile-comment");
-      const box = first ? scrollerOf(first) : document.scrollingElement || document.documentElement;
-      let last = 0;
-      let stagnant = 0;
-      for (let i = 0; i < 200 && stagnant < 8; i++) {
-        takeRd();
-        if (cards.length <= last) stagnant += 1;
-        else stagnant = 0;
-        last = cards.length;
-        box.scrollTop = box.scrollHeight;
-        window.scrollTo(0, document.body.scrollHeight);
-        await sleep(650);
-      }
-    } else takeRd();
+    const first = document.querySelector("shreddit-post, shreddit-profile-comment");
+    const box = first ? scrollerOf(first) : document.scrollingElement || document.documentElement;
+    let last = 0;
+    let stagnant = 0;
+    for (let i = 0; i < 200 && stagnant < 8; i++) {
+      takeRd();
+      if (cards.length <= last) stagnant += 1;
+      else stagnant = 0;
+      last = cards.length;
+      box.scrollTop = box.scrollHeight;
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleep(650);
+    }
     return { source: "reddit", collection: "saved", collectionName: "Saved", cards };
   }
   if (/instagram\.com/.test(url)) {
+    if (!/instagram\.com\/(saves|[^/]+\/saved)/.test(url)) return null;
     const takeIg = () => {
       for (const a of document.querySelectorAll("a[href*='/p/'], a[href*='/reel/']")) {
         const href = a.href || "";
@@ -249,21 +245,19 @@ export async function extractPage() {
         });
       }
     };
-    if (/instagram\.com\/(saves|[^/]+\/saved)/.test(url)) {
-      const first = document.querySelector("a[href*='/p/'], a[href*='/reel/']");
-      const box = first ? scrollerOf(first) : document.scrollingElement || document.documentElement;
-      let last = 0;
-      let stagnant = 0;
-      for (let i = 0; i < 200 && stagnant < 8; i++) {
-        takeIg();
-        if (cards.length <= last) stagnant += 1;
-        else stagnant = 0;
-        last = cards.length;
-        box.scrollTop = box.scrollHeight;
-        window.scrollTo(0, document.body.scrollHeight);
-        await sleep(650);
-      }
-    } else takeIg();
+    const first = document.querySelector("a[href*='/p/'], a[href*='/reel/']");
+    const box = first ? scrollerOf(first) : document.scrollingElement || document.documentElement;
+    let last = 0;
+    let stagnant = 0;
+    for (let i = 0; i < 200 && stagnant < 8; i++) {
+      takeIg();
+      if (cards.length <= last) stagnant += 1;
+      else stagnant = 0;
+      last = cards.length;
+      box.scrollTop = box.scrollHeight;
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleep(650);
+    }
     return { source: "instagram", collection: "saved", collectionName: "Saved", cards };
   }
   return null;
@@ -452,6 +446,9 @@ export function detectListState() {
   if (/\/i\/flow\/login|\/login(\?|$)|accounts\/login|accounts\.google|ServiceLogin|reddit\.com\/login/.test(url)) {
     return "logged-out";
   }
+  if (!/\/i\/(bookmarks|history)|instagram\.com\/(saves|[^/]+\/saved)|\/user\/[^/]+\/saved|\/saved\/?(\?|$)|youtube\.com\/playlist/.test(url)) {
+    return "unknown";
+  }
   if (
     document.querySelector(
       'article[data-testid="tweet"], shreddit-post, shreddit-profile-comment, a[href*="/p/"], a[href*="/reel/"], ytd-playlist-video-renderer',
@@ -459,8 +456,5 @@ export function detectListState() {
   ) {
     return "ready";
   }
-  if (/\/i\/(bookmarks|history)|instagram\.com\/(saves|[^/]+\/saved)|\/user\/[^/]+\/saved|\/saved\/?(\?|$)|list=WL/.test(url)) {
-    return "loading";
-  }
-  return "unknown";
+  return "loading";
 }
