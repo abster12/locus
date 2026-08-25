@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import {
   api,
   boot,
@@ -10,7 +10,7 @@ import {
   type SourceId,
   type SummarySnapshot,
 } from "./api.ts";
-import { isPlatformPermalink, isReadingItem, isStageOutbound, outboundUrls, youtubeVideoId } from "../../core/sanitize.ts";
+import { canOpenInStage, isPlatformPermalink, isReadingItem, outboundUrls, youtubeVideoId } from "../../core/sanitize.ts";
 import { SHELVES, shelfOfTag, shelvesWithCounts, tagsForShelf } from "../../core/categories.ts";
 import { detectPlaces, REGIONS, regionByName, type PlaceHit, type Region } from "../../core/places.ts";
 import { motif, motifIcon } from "./motifs.ts";
@@ -82,6 +82,34 @@ export function App() {
   const [inbox, setInbox] = useState<number | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => readStoredTheme() ?? systemTheme());
   const [stageItem, setStageItem] = useState<ItemCard | null>(null);
+  const [stagePage, setStagePage] = useState<string | null>(null);
+  const openStage = (item: ItemCard, page?: string) => {
+    const dest = page ?? firstEmbed(item);
+    if (!dest) {
+      setStageItem(item);
+      setStagePage(null);
+      return;
+    }
+    try {
+      const u = new URL(dest);
+      const href = u.toString();
+      const ok = (u.protocol === "http:" || u.protocol === "https:") && canOpenInStage(href, item.url);
+      if (!ok) {
+        setStageItem(item);
+        setStagePage(null);
+        return;
+      }
+      if (!isEmbedUrl(href) && frameDenied(href)) {
+        window.open(href, "_blank", "noopener,noreferrer");
+        return;
+      }
+      setStageItem(item);
+      setStagePage(href);
+    } catch {
+      setStageItem(item);
+      setStagePage(null);
+    }
+  };
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -221,17 +249,25 @@ export function App() {
           Sources
         </Tab>
       </nav>
-      {route.name === "recent" && <ItemList view="recent" initialShelf={route.shelf} onOpen={setStageItem} />}
-      {route.name === "inbox" && <ItemList view="inbox" initialShelf={route.shelf} onOpen={setStageItem} />}
-      {route.name === "search" && <ItemList view="search" initialQ={route.q} onOpen={setStageItem} />}
+      {route.name === "recent" && <ItemList view="recent" initialShelf={route.shelf} onOpen={openStage} />}
+      {route.name === "inbox" && <ItemList view="inbox" initialShelf={route.shelf} onOpen={openStage} />}
+      {route.name === "search" && <ItemList view="search" initialQ={route.q} onOpen={openStage} />}
       {route.name === "collections" && <CollectionsPage />}
-      {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={setStageItem} />}
+      {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
       {route.name === "sources" && <SourcesPage />}
-      {route.name === "reading" && <ReadingPage onOpen={setStageItem} />}
-      {route.name === "atlas" && <AtlasPage onOpen={setStageItem} />}
+      {route.name === "reading" && <ReadingPage onOpen={openStage} />}
+      {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {route.name === "shelves" && <ShelvesPage />}
       {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
-      <Stage item={stageItem} onClose={() => setStageItem(null)} />
+      <Stage
+        key={`${stageItem?.id ?? "closed"}:${stagePage ?? ""}`}
+        item={stageItem}
+        startPage={stagePage}
+        onClose={() => {
+          setStageItem(null);
+          setStagePage(null);
+        }}
+      />
     </div>
   );
 }
@@ -420,18 +456,25 @@ function useLinkPreview(url: string | null): { preview: LinkPreview | null; done
   return { preview, done };
 }
 
-function LinkCards({ links }: { links: string[] }) {
+function pickLink(e: MouseEvent<HTMLAnchorElement>, url: string, onPick: (url: string) => void) {
+  e.stopPropagation();
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  e.preventDefault();
+  onPick(url);
+}
+
+function LinkCards({ links, onPick }: { links: string[]; onPick: (url: string) => void }) {
   if (links.length === 0) return null;
   return (
     <div className="linkcards">
       {links.map((u) => (
-        <LinkPreviewCard key={u} url={u} />
+        <LinkPreviewCard key={u} url={u} onPick={onPick} />
       ))}
     </div>
   );
 }
 
-function LinkPreviewCard({ url }: { url: string }) {
+function LinkPreviewCard({ url, onPick }: { url: string; onPick: (url: string) => void }) {
   const { preview: p } = useLinkPreview(url);
   const host = hostOf(url);
   const mono = (
@@ -441,7 +484,7 @@ function LinkPreviewCard({ url }: { url: string }) {
   );
   if (p && usefulPreview(p, url)) {
     return (
-      <a className="linkcard rich" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      <a className="linkcard rich" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => pickLink(e, url, onPick)}>
         {p.image ? <img className="lc-img" src={p.image} alt="" referrerPolicy="no-referrer" loading="lazy" /> : mono}
         <span className="lc-text">
           <span className="lc-host">{p.siteName || host}</span>
@@ -453,7 +496,7 @@ function LinkPreviewCard({ url }: { url: string }) {
     );
   }
   return (
-    <a className="linkcard" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+    <a className="linkcard" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => pickLink(e, url, onPick)}>
       {mono}
       <span className="lc-text">
         <span className="lc-host">{host}</span>
@@ -522,7 +565,7 @@ function ItemList({
   collectionId?: string;
   initialQ?: string;
   initialShelf?: string;
-  onOpen: (item: ItemCard) => void;
+  onOpen: (item: ItemCard, page?: string) => void;
 }) {
   const [source, setSource] = useState<string>("");
   const [shelfKey, setShelfKey] = useState(initialShelf);
@@ -746,7 +789,7 @@ function deskPoster(item: ItemCard): { color: string; ink: string; motifName: st
   };
 }
 
-function PostCard({ item, onStatus, onTag, onOpen }: { item: ItemCard; onStatus: (id: string, status: string) => void; onTag: (name: string) => void; onOpen: (item: ItemCard) => void }) {
+function PostCard({ item, onStatus, onTag, onOpen }: { item: ItemCard; onStatus: (id: string, status: string) => void; onTag: (name: string) => void; onOpen: (item: ItemCard, page?: string) => void }) {
   const { text, links } = previewUrls(item);
   const title = cardTitle(item);
   const showTitle = Boolean(title && (!text || !text.startsWith(title.slice(0, 40))));
@@ -770,8 +813,8 @@ function PostCard({ item, onStatus, onTag, onOpen }: { item: ItemCard; onStatus:
       </header>
       {showTitle ? <h3>{title}</h3> : null}
       {text ? <Excerpt text={text} /> : null}
-      {visual ? <CapturedMedia item={item} /> : links.length ? <LinkCards links={links} /> : <Poster {...deskPoster(item)} />}
-      {visual ? <LinkCards links={links} /> : null}
+      {visual ? <CapturedMedia item={item} /> : links.length ? <LinkCards links={links} onPick={(url) => onOpen(item, url)} /> : <Poster {...deskPoster(item)} />}
+      {visual ? <LinkCards links={links} onPick={(url) => onOpen(item, url)} /> : null}
       <footer className="post-foot">
         <div className="tags">
           {item.tags.map((t) => (
@@ -805,7 +848,7 @@ function readingTarget(item: ItemCard): string | undefined {
   return outboundUrls(item.body, item.url)[0];
 }
 
-function ReadingPage({ onOpen }: { onOpen: (item: ItemCard) => void }) {
+function ReadingPage({ onOpen }: { onOpen: (item: ItemCard, page?: string) => void }) {
   const [items, setItems] = useState<ItemCard[]>([]);
   const [sort, setSort] = useState<"pub" | "date">("pub");
   const [err, setErr] = useState<string | null>(null);
@@ -898,7 +941,7 @@ function PubHead({ host, count, sampleUrl }: { host: string; count: number; samp
   );
 }
 
-function ClipCard({ item, url, host, onOpen }: { item: ItemCard; url: string; host: string; onOpen: (item: ItemCard) => void }) {
+function ClipCard({ item, url, host, onOpen }: { item: ItemCard; url: string; host: string; onOpen: (item: ItemCard, page?: string) => void }) {
   const { preview } = useLinkPreview(url);
   const rich = preview && usefulPreview(preview, url);
   const title = (rich && preview.title) || item.title || host;
@@ -910,7 +953,7 @@ function ClipCard({ item, url, host, onOpen }: { item: ItemCard; url: string; ho
       className="clip"
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("a, button")) return;
-        onOpen(item);
+        onOpen(item, url);
       }}
     >
       {img ? (
@@ -932,7 +975,7 @@ function ClipCard({ item, url, host, onOpen }: { item: ItemCard; url: string; ho
 
 const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
 
-function AtlasPage({ onOpen }: { onOpen: (item: ItemCard) => void }) {
+function AtlasPage({ onOpen }: { onOpen: (item: ItemCard, page?: string) => void }) {
   const [items, setItems] = useState<ItemCard[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -1078,7 +1121,7 @@ function atlasPreviewUrl(item: ItemCard): string | null {
   return null;
 }
 
-function AtlasCard({ item, region, hits, onOpen }: { item: ItemCard; region: Region; hits: PlaceHit[]; onOpen: (item: ItemCard) => void }) {
+function AtlasCard({ item, region, hits, onOpen }: { item: ItemCard; region: Region; hits: PlaceHit[]; onOpen: (item: ItemCard, page?: string) => void }) {
   const word = hits.find((h) => h.region === region.name)?.place || item.title?.split(/\s+/)[0] || "travel";
   const caption = item.title || item.body?.replace(/\s+/g, " ").trim().slice(0, 120) || who(item) || item.url;
   return (
@@ -1521,9 +1564,11 @@ function SummaryPage({ scope, scopeRef }: { scope: "day" | "collection"; scopeRe
   );
 }
 
-function readStageSize(): { w: number; h: number } | null {
+type StageKind = "phone" | "book";
+
+function readStageSize(kind: StageKind): { w: number; h: number } | null {
   try {
-    const s = localStorage.getItem("locus-stage-size");
+    const s = localStorage.getItem(`locus-stage-size-${kind}`);
     if (!s) return null;
     const j = JSON.parse(s) as { w?: unknown; h?: unknown };
     if (typeof j.w === "number" && typeof j.h === "number") return { w: j.w, h: j.h };
@@ -1565,12 +1610,43 @@ function instagramEmbed(url: string): string | null {
   }
 }
 
-function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }) {
+function firstEmbed(item: ItemCard): string | undefined {
+  if (youtubeVideoId(item.url) || instagramEmbed(item.url)) return undefined;
+  for (const u of extractLinks(item.body).links) {
+    if (youtubeVideoId(u) || instagramEmbed(u)) return u;
+  }
+}
+
+function isEmbedUrl(url: string): boolean {
+  return Boolean(youtubeVideoId(url) || instagramEmbed(url));
+}
+
+function frameDenied(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    const list = JSON.parse(localStorage.getItem("locus-frame-no") || "[]") as unknown;
+    return Array.isArray(list) && list.includes(host);
+  } catch {
+    return false;
+  }
+}
+
+function ejectToTab(url: string) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    const raw = JSON.parse(localStorage.getItem("locus-frame-no") || "[]") as unknown;
+    const list = Array.isArray(raw) ? (raw as string[]) : [];
+    if (!list.includes(host)) localStorage.setItem("locus-frame-no", JSON.stringify([...list, host]));
+  } catch {
+    /* ignore */
+  }
+  return window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function Stage({ item, startPage, onClose }: { item: ItemCard | null; startPage?: string | null; onClose: () => void }) {
   const box = useRef<HTMLDivElement>(null);
-  const [page, setPage] = useState<string | null>(null);
-  const [frame, setFrame] = useState<"checking" | "wait" | "ok" | "blocked" | "declined">("wait");
-  const [playing, setPlaying] = useState(false);
-  const [igOn, setIgOn] = useState(false);
+  const [page, setPage] = useState<string | null>(startPage ?? null);
+  const [frame, setFrame] = useState<"checking" | "wait" | "ok">("wait");
   const [prose, setProse] = useState<string | null>(null);
   const [proseErr, setProseErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1579,10 +1655,8 @@ function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }
   const [notes, setNotes] = useState(item?.notes ?? []);
 
   useEffect(() => {
-    setPage(null);
+    setPage(startPage ?? null);
     setFrame("wait");
-    setPlaying(false);
-    setIgOn(false);
     setProse(null);
     setProseErr(null);
     setBusy(false);
@@ -1591,24 +1665,43 @@ function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }
     setNotes(item?.notes ?? []);
   }, [item?.id]);
 
+  const kind: StageKind = page && !isEmbedUrl(page) ? "book" : "phone";
+
   useLayoutEffect(() => {
     const el = box.current;
-    const sz = readStageSize();
-    if (el && sz) {
-      el.style.width = `${sz.w}px`;
-      el.style.height = `${sz.h}px`;
+    if (!el) return;
+    const sz = readStageSize(kind);
+    if (sz) {
+      el.style.width = `${clamp(sz.w, 320, window.innerWidth - 32)}px`;
+      el.style.height = `${clamp(sz.h, 280, window.innerHeight - 72)}px`;
+    } else {
+      el.style.width = "";
+      el.style.height = "";
     }
-  }, [item]);
+  }, [item, kind]);
+
+  const dropLive = (url: string) => {
+    if (!ejectToTab(url)) {
+      setFrame("wait");
+      return;
+    }
+    if (startPage && url === startPage) onClose();
+    else setPage(null);
+  };
 
   useEffect(() => {
-    if (!page) return;
+    if (!page || isEmbedUrl(page)) return;
     setFrame("checking");
     let alive = true;
     api
       .frameCheck(page)
       .then((r) => {
         if (!alive) return;
-        setFrame(r.framed === "no" ? "blocked" : "wait");
+        if (r.framed === "no") {
+          dropLive(page);
+          return;
+        }
+        setFrame("wait");
       })
       .catch(() => {
         if (alive) setFrame("wait");
@@ -1631,30 +1724,35 @@ function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }
 
   if (!item) return null;
 
-  const ytId = youtubeVideoId(item.url);
-  const ig = instagramEmbed(item.url);
+  const pageYt = page ? youtubeVideoId(page) : null;
+  const pageIg = page ? instagramEmbed(page) : null;
+  const ytId = pageYt || (!page ? youtubeVideoId(item.url) : null);
+  const ig = pageIg || (!page ? instagramEmbed(item.url) : null);
   const visual = firstVisual(item);
   const title = cardTitle(item);
   const body = (item.body || "").replace(/(https?:\/\/)\s+/g, "$1");
-  const live = Boolean(page);
-  const orig = live ? page! : item.url;
+  const live = Boolean(page) && !pageYt && !pageIg;
+  const orig = page || item.url;
 
   const pushPage = (url: string) => {
     try {
       const u = new URL(url);
+      const href = u.toString();
       if (u.protocol !== "http:" && u.protocol !== "https:") return;
-      if (!isStageOutbound(u.toString(), item.url)) return;
-      setPage(u.toString());
+      if (!canOpenInStage(href, item.url)) return;
+      if (!isEmbedUrl(href) && frameDenied(href)) {
+        window.open(href, "_blank", "noopener,noreferrer");
+        return;
+      }
+      setPage(href);
       setFrame("checking");
-      setPlaying(false);
-      setIgOn(false);
     } catch {
       /* ignore */
     }
   };
 
   return (
-    <div className="stage" ref={box} role="dialog" aria-label="Save viewer">
+    <div className={`stage${kind === "book" ? " book" : ""}`} ref={box} role="dialog" aria-label="Save viewer">
       <button
         type="button"
         className="stage-grip"
@@ -1678,7 +1776,7 @@ function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }
           const up = () => {
             const next = el.getBoundingClientRect();
             try {
-              localStorage.setItem("locus-stage-size", JSON.stringify({ w: next.width, h: next.height }));
+              localStorage.setItem(`locus-stage-size-${kind}`, JSON.stringify({ w: next.width, h: next.height }));
             } catch {
               /* ignore */
             }
@@ -1690,14 +1788,14 @@ function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }
         }}
       />
       <header className="stage-bar">
-        {live ? (
+        {page ? (
           <button type="button" className="stage-icon" title="Back to the save" onClick={() => setPage(null)}>
             ←
           </button>
         ) : null}
         <div className="stage-who">
-          <span className="handle">{live ? hostOf(page!) : who(item) || hostOf(item.url)}</span>
-          <span className="by-date">{live ? "live page" : sourceLabel(item.source)}</span>
+          <span className="handle">{page ? hostOf(page) : who(item) || hostOf(item.url)}</span>
+          <span className="by-date">{pageYt ? "YouTube" : live ? "live page" : sourceLabel(item.source)}</span>
         </div>
         <a className="stage-icon" href={orig} target="_blank" rel="noopener noreferrer" title="Open original">
           ↗
@@ -1712,103 +1810,60 @@ function Stage({ item, onClose }: { item: ItemCard | null; onClose: () => void }
             <div className="stage-consent">
               <p>Opening {hostOf(page!)}…</p>
             </div>
-          ) : frame === "blocked" || frame === "declined" ? (
-            <div className="stage-consent">
-              <p>This page won’t sit in a frame.</p>
-              <p className="host">{hostOf(page!)}</p>
-              {frame === "blocked" ? (
-                <div className="stage-ai-row">
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => {
-                      window.open(page!, "_blank", "noopener,noreferrer");
-                      setPage(null);
-                      setFrame("wait");
-                    }}
-                  >
-                    Open in new tab
-                  </button>
-                  <button type="button" onClick={() => setFrame("declined")}>
-                    Not now
-                  </button>
-                </div>
-              ) : (
-                <p className="host">Use ↗ to open it outside Locus.</p>
-              )}
-            </div>
           ) : (
             <iframe
               key={page!}
               className="stage-wv"
               src={page!}
               title={hostOf(page!)}
-              onError={() => setFrame("blocked")}
+              onError={() => dropLive(page!)}
               onLoad={(e) => {
                 const el = e.currentTarget;
                 // ponytail: about:blank vs SecurityError. chrome-error:// pages look like success; ↗ still works.
                 window.setTimeout(() => {
                   if (!el.isConnected) return;
-                  setFrame(inspectFrame(el) ? "ok" : "blocked");
+                  if (inspectFrame(el)) setFrame("ok");
+                  else dropLive(page!);
                 }, 50);
               }}
             />
           )}
         </div>
       ) : (
-        <div className="stage-body">
-          {ytId && playing ? (
-            <iframe
-              className="stage-wv"
-              style={{ minHeight: 0, aspectRatio: "16 / 9", maxHeight: "55%", flex: "none" }}
-              src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId)}`}
-              title="YouTube"
-              allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
-              allowFullScreen
-            />
-          ) : ytId ? (
-            <button
-              type="button"
-              className={`stage-play${visual ? " has-thumb" : ""}`}
-              style={visual ? { backgroundImage: `url(${visual.url})` } : undefined}
-              onClick={() => setPlaying(true)}
-            >
-              <span className="tri" />
-              Play here
-            </button>
-          ) : visual ? (
-            visual.kind === "video" ? (
-              <video className="stage-shot video" src={visual.url} controls playsInline preload="metadata" />
-            ) : (
-              <img className={ig ? "stage-ig" : "stage-shot"} src={visual.url} alt="" referrerPolicy="no-referrer" />
-            )
-          ) : null}
-          {ig && !igOn ? (
-            <button type="button" className="stage-try" onClick={() => setIgOn(true)}>
-              Try embed
-            </button>
-          ) : null}
-          {ig && igOn ? (
-            <iframe
-              className="stage-wv"
-              style={{ minHeight: 0, aspectRatio: "9 / 16", maxHeight: "45%", flex: "none" }}
-              src={ig}
-              title="Instagram"
-            />
-          ) : null}
-          <div className="stage-copy">
-            {title ? <h3>{title}</h3> : null}
-            {body ? <StageText text={body} permalink={item.url} onOutbound={pushPage} /> : null}
-            <p className="honest">
-              {ytId
-                ? "Play here is an official YouTube embed. Public videos play. Private or age-gated videos fail in the frame — use ↗."
-                : ig
-                  ? "instagram.com will not sit in a frame. Try embed is a postcard; Reels often refuse. Captured still + ↗ is the fallback."
-                  : outboundUrls(item.body, item.url).length
-                    ? "The save is local. Click a link to open it here. If the site refuses the frame, Locus will ask before opening a tab."
-                    : "The text Locus already captured. Live X, Instagram, and Reddit pages are not framed here."}
-            </p>
-          </div>
+        <div className={ig ? "stage-body web" : "stage-body"}>
+          {ig ? (
+            <iframe className="stage-wv" src={ig} title="Instagram" />
+          ) : (
+            <>
+              {ytId ? (
+                <iframe
+                  className="stage-wv"
+                  style={{ minHeight: 0, aspectRatio: "16 / 9", maxHeight: "55%", flex: "none" }}
+                  src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(ytId)}`}
+                  title="YouTube"
+                  allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                />
+              ) : visual ? (
+                visual.kind === "video" ? (
+                  <video className="stage-shot video" src={visual.url} controls playsInline preload="metadata" />
+                ) : (
+                  <img className="stage-shot" src={visual.url} alt="" referrerPolicy="no-referrer" />
+                )
+              ) : null}
+              <div className="stage-copy">
+                {title ? <h3>{title}</h3> : null}
+                {body ? <StageText text={body} permalink={item.url} onOutbound={pushPage} /> : null}
+                <p className="honest">
+                  {ytId
+                    ? "Official YouTube embed. Public videos play. Private or age-gated videos fail in the frame — use ↗."
+                    : outboundUrls(item.body, item.url).length
+                      ? "The save is local. Click a link to open it here. If the site refuses the frame, Locus will ask before opening a tab."
+                      : "The text Locus already captured. Live X, Instagram, and Reddit pages are not framed here."}
+                </p>
+              </div>
+            </>
+          )}
         </div>
       )}
       <div className="stage-ai">
@@ -1872,7 +1927,7 @@ function StageText({ text, permalink, onOutbound }: { text: string; permalink: s
       {parts.map((part, i) => {
         if (!/^https?:\/\//i.test(part)) return <Fragment key={i}>{part}</Fragment>;
         const label = part.replace(/^https?:\/\//, "");
-        if (isStageOutbound(part, permalink)) {
+        if (canOpenInStage(part, permalink)) {
           return (
             <a
               key={i}

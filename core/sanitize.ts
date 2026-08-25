@@ -92,8 +92,7 @@ export function isPlatformPermalink(url: string): boolean {
     if (/(^|\.)(x|twitter)\.com$/i.test(host)) return /\/status\/\d+/.test(u.pathname);
     if (/(^|\.)instagram\.com$/i.test(host)) return /\/(p|reel|tv)\//.test(u.pathname);
     if (/(^|\.)reddit\.com$/i.test(host)) return /\/comments\//.test(u.pathname);
-    if (/(^|\.)youtube\.com$/i.test(host)) return Boolean(u.searchParams.get("v"));
-    if (/(^|\.)youtu\.be$/i.test(host)) return u.pathname.length > 1;
+    if (/(^|\.)(youtube\.com|youtu\.be)$/i.test(host)) return Boolean(youtubeVideoId(url));
     return false;
   } catch {
     return false;
@@ -105,10 +104,18 @@ export function youtubeVideoId(url: string): string | null {
     const u = new URL(url);
     if (/(^|\.)youtu\.be$/i.test(u.hostname)) return u.pathname.replace(/^\//, "").split("/")[0] || null;
     if (!/(^|\.)youtube\.com$/i.test(u.hostname)) return null;
-    return u.searchParams.get("v");
+    const v = u.searchParams.get("v");
+    if (v) return v;
+    const parts = u.pathname.split("/").filter(Boolean);
+    if ((parts[0] === "shorts" || parts[0] === "embed" || parts[0] === "live" || parts[0] === "v") && parts[1]) return parts[1];
+    return null;
   } catch {
     return null;
   }
+}
+
+export function canOpenInStage(url: string, permalink?: string): boolean {
+  return Boolean(youtubeVideoId(url)) || isStageOutbound(url, permalink);
 }
 
 export function sanitizeItemDraft(input: {

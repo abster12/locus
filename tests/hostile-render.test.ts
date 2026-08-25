@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { inferHandleFromUrl, isPlatformPermalink, isReadingItem, isStageOutbound, outboundUrls, sanitizeItemDraft, sanitizeUrl, youtubeVideoId, RejectedPayload } from "../core/sanitize.ts";
+import { canOpenInStage, inferHandleFromUrl, isPlatformPermalink, isReadingItem, isStageOutbound, outboundUrls, sanitizeItemDraft, sanitizeUrl, youtubeVideoId, RejectedPayload } from "../core/sanitize.ts";
 import { dateLabel } from "../core/types.ts";
 import { parseRedditTime } from "../site-packs/reddit/index.ts";
 
@@ -37,10 +37,21 @@ test("isPlatformPermalink is the post itself, not an outbound article", () => {
   assert.equal(isPlatformPermalink("https://lucumr.pocoo.org/2026/8/22/fast-hard-code/"), false);
 });
 
-test("youtubeVideoId matches watch and youtu.be, not other hosts", () => {
+test("youtubeVideoId matches watch, youtu.be, and shorts, not other hosts", () => {
   assert.equal(youtubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ");
   assert.equal(youtubeVideoId("https://youtu.be/dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+  assert.equal(youtubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ"), "dQw4w9WgXcQ");
+  assert.equal(youtubeVideoId("https://m.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ");
   assert.equal(youtubeVideoId("https://x.com/a/status/1"), null);
+});
+
+test("youtube links play in the stage, they are not articles", () => {
+  const tweet = "https://x.com/a/status/1";
+  assert.equal(canOpenInStage("https://www.youtube.com/watch?v=dQw4w9WgXcQ", tweet), true);
+  assert.equal(canOpenInStage("https://www.youtube.com/shorts/dQw4w9WgXcQ", tweet), true);
+  assert.equal(isStageOutbound("https://www.youtube.com/watch?v=dQw4w9WgXcQ", tweet), false);
+  assert.equal(isReadingItem("watch https://www.youtube.com/watch?v=dQw4w9WgXcQ", tweet), false);
+  assert.equal(isPlatformPermalink("https://www.youtube.com/shorts/dQw4w9WgXcQ"), true);
 });
 
 test("stage frames outbound articles, not the save's own permalink", () => {
