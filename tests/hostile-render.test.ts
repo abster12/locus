@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canOpenInStage, inferHandleFromUrl, isPlatformPermalink, isReadingItem, isStageOutbound, outboundUrls, sanitizeItemDraft, sanitizeUrl, youtubeVideoId, RejectedPayload } from "../core/sanitize.ts";
+import { canOpenInStage, inferHandleFromUrl, isPlatformPermalink, isReadingItem, isStageOutbound, neverFrame, outboundUrls, sanitizeItemDraft, sanitizeUrl, youtubeVideoId, RejectedPayload } from "../core/sanitize.ts";
 import { dateLabel } from "../core/types.ts";
 import { parseRedditTime } from "../site-packs/reddit/index.ts";
 
@@ -52,6 +52,15 @@ test("youtube links play in the stage, they are not articles", () => {
   assert.equal(isStageOutbound("https://www.youtube.com/watch?v=dQw4w9WgXcQ", tweet), false);
   assert.equal(isReadingItem("watch https://www.youtube.com/watch?v=dQw4w9WgXcQ", tweet), false);
   assert.equal(isPlatformPermalink("https://www.youtube.com/shorts/dQw4w9WgXcQ"), true);
+});
+
+test("reddit and x never sit in a frame, instagram embed does", () => {
+  assert.equal(neverFrame("https://www.reddit.com/r/foo/s/abc"), true);
+  assert.equal(neverFrame("https://redd.it/abc"), true);
+  assert.equal(neverFrame("https://x.com/a/status/1"), true);
+  assert.equal(neverFrame("https://www.instagram.com/reel/CODE/"), true);
+  assert.equal(neverFrame("https://www.instagram.com/reel/CODE/embed"), false);
+  assert.equal(neverFrame("https://lucumr.pocoo.org/"), false);
 });
 
 test("stage frames outbound articles, not the save's own permalink", () => {

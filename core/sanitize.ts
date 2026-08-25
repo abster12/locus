@@ -118,6 +118,17 @@ export function canOpenInStage(url: string, permalink?: string): boolean {
   return Boolean(youtubeVideoId(url)) || isStageOutbound(url, permalink);
 }
 
+export function neverFrame(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (/(^|\.)instagram\.com$/i.test(host)) return !/\/embed\b/i.test(u.pathname);
+    return /(^|\.)(x|twitter|reddit|facebook|tiktok)\.com$/i.test(host) || /(^|\.)(fb\.com|fb\.me|redd\.it)$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export function sanitizeItemDraft(input: {
   contentType: string;
   title?: string;

@@ -10,7 +10,7 @@ import {
   type SourceId,
   type SummarySnapshot,
 } from "./api.ts";
-import { canOpenInStage, isPlatformPermalink, isReadingItem, outboundUrls, youtubeVideoId } from "../../core/sanitize.ts";
+import { canOpenInStage, isPlatformPermalink, isReadingItem, neverFrame, outboundUrls, youtubeVideoId } from "../../core/sanitize.ts";
 import { SHELVES, shelfOfTag, shelvesWithCounts, tagsForShelf } from "../../core/categories.ts";
 import { detectPlaces, REGIONS, regionByName, type PlaceHit, type Region } from "../../core/places.ts";
 import { motif, motifIcon } from "./motifs.ts";
@@ -93,13 +93,17 @@ export function App() {
     try {
       const u = new URL(dest);
       const href = u.toString();
-      const ok = (u.protocol === "http:" || u.protocol === "https:") && canOpenInStage(href, item.url);
-      if (!ok) {
+      if (u.protocol !== "http:" && u.protocol !== "https:") {
         setStageItem(item);
         setStagePage(null);
         return;
       }
-      if (!isEmbedUrl(href) && frameDenied(href)) {
+      if (isEmbedUrl(href)) {
+        setStageItem(item);
+        setStagePage(href);
+        return;
+      }
+      if (!canOpenInStage(href, item.url) || frameDenied(href) || neverFrame(href)) {
         window.open(href, "_blank", "noopener,noreferrer");
         return;
       }
@@ -1739,8 +1743,11 @@ function Stage({ item, startPage, onClose }: { item: ItemCard | null; startPage?
       const u = new URL(url);
       const href = u.toString();
       if (u.protocol !== "http:" && u.protocol !== "https:") return;
-      if (!canOpenInStage(href, item.url)) return;
-      if (!isEmbedUrl(href) && frameDenied(href)) {
+      if (isEmbedUrl(href)) {
+        setPage(href);
+        return;
+      }
+      if (!canOpenInStage(href, item.url) || frameDenied(href) || neverFrame(href)) {
         window.open(href, "_blank", "noopener,noreferrer");
         return;
       }
