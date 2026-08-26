@@ -1,5 +1,3 @@
-import { extractCurrent } from "./extract.js";
-
 const status = document.getElementById("status");
 const originEl = document.getElementById("origin");
 const tokenEl = document.getElementById("token");
@@ -80,47 +78,14 @@ async function saveOne() {
     status.textContent = "Saving…";
     const tab = await activeTab();
     const { origin, token } = await creds();
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: extractCurrent,
+    const reply = await chrome.runtime.sendMessage({
+      type: "save-item",
+      tabId: tab.id,
+      tabUrl: tab.url,
+      origin,
+      token,
     });
-    if (!result?.item) {
-      status.textContent = "This page is not a known post.";
-      return;
-    }
-    const sessionRes = await fetch(`${origin}/capture/v1/sessions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        protocolVersion: 1,
-        source: result.source,
-        producer: { id: "locus.extension", version: "0.1.0" },
-        accountExternalId: result.account || "pending",
-        collection: { externalId: result.collection, name: result.collectionName, url: tab.url },
-        mode: "incremental",
-        observedAt: new Date().toISOString(),
-      }),
-    });
-    const session = await sessionRes.json();
-    if (!sessionRes.ok) throw new Error(session.error || "session failed");
-    const batchRes = await fetch(`${origin}/capture/v1/batches`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId: session.sessionId,
-        sequence: 1,
-        idempotencyKey: `${session.sessionId}:1`,
-        changes: [{ kind: "upsert", externalId: result.externalId, sourcePosition: 0, item: result.item }],
-      }),
-    });
-    const batch = await batchRes.json();
-    if (!batchRes.ok) throw new Error(batch.error || "batch failed");
-    await fetch(`${origin}/capture/v1/finish`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: session.sessionId, coverage: "partial" }),
-    });
-    status.textContent = "Saved 1 record to Locus.";
+    status.textContent = reply?.text || "Done.";
   } catch (e) {
     status.textContent = e instanceof Error ? e.message : String(e);
   }

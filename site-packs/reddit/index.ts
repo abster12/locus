@@ -1,5 +1,5 @@
-import type { CaptureBatchV1 } from "../../packages/protocol/types.ts";
-import { cardsToBatch, type CaptureContext, type SitePack } from "../shared.ts";
+// Reddit Saved. After the list, readList opens each *new* post/comment for the body.
+import { scanList, type CaptureContext, type Post, type SitePack } from "../shared.ts";
 
 export function parseRedditTime(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined;
@@ -21,12 +21,13 @@ function rdState(): "logged-out" | "challenge" | "empty" | "ready" | "loading" |
     return "logged-out";
   }
   if (/reddit.com\/challenge|are you a human/i.test(url + text) && document.querySelector("iframe[src*='captcha']")) return "challenge";
+  // Front page also has shreddit-post — only Saved counts.
+  if (!/reddit\.com\/(user\/[^/]+\/saved|saved)/.test(url)) return "wrong-page";
   if (/looks like you haven.t saved anything/i.test(text)) return "empty";
   if (document.querySelector("shreddit-post, shreddit-profile-comment, shreddit-comment, .thing.link, .thing.comment, article")) {
     return "ready";
   }
-  if (/\/saved/.test(url)) return "loading";
-  return "unknown";
+  return "loading";
 }
 
 function rdAccount(): string | null {
@@ -39,26 +40,9 @@ function rdAccount(): string | null {
   return name || null;
 }
 
-function extractRdCards(): {
-  externalId: string;
-  contentType: "post" | "comment";
-  url: string;
-  title?: string;
-  body?: string;
-  authorName?: string;
-  authorHandle?: string;
-  publishedAt?: string;
-}[] {
-  const cards: {
-    externalId: string;
-    contentType: "post" | "comment";
-    url: string;
-    title?: string;
-    body?: string;
-    authorName?: string;
-    authorHandle?: string;
-    publishedAt?: string;
-  }[] = [];
+// Runs inside the tab via evaluate(). Must stay self-contained (no module locals).
+function extractRdCards(): Post[] {
+  const cards: Post[] = [];
 
   const parseRedditTime = (raw: string | null | undefined) => {
     if (!raw) return undefined;
@@ -106,11 +90,11 @@ function extractRdCards(): {
     const outbound = outboundOf(el, url);
     const text = (el.querySelector("[slot='text']") as HTMLElement | null)?.innerText?.trim();
     cards.push({
-      externalId: ext,
+      id: ext,
       contentType: "post",
       url,
       title: el.getAttribute("post-title") || (el.querySelector("[slot='title']") as HTMLElement | null)?.innerText,
-      body: [text, outbound].filter(Boolean).join("\n\n") || undefined,
+      text: [text, outbound].filter(Boolean).join("\n\n") || undefined,
       authorHandle: author,
       authorName: author,
       publishedAt: whenOf(el),
@@ -123,7 +107,7 @@ function extractRdCards(): {
     const full = id.startsWith("t1_") ? id : `t1_${id.replace(/^t1_/, "")}`;
     const permalink = el.getAttribute("permalink") || el.querySelector("a[href*='/comment/']")?.getAttribute("href") || "";
     cards.push({
-      externalId: full,
+      id: full,
       contentType: "comment",
       url: permalink
         ? permalink.startsWith("http")
@@ -131,7 +115,7 @@ function extractRdCards(): {
           : `https://www.reddit.com${permalink}`
         : `https://www.reddit.com/${full}`,
       title: "Comment",
-      body: (el.querySelector("[slot='comment']") as HTMLElement | null)?.innerText || (el as HTMLElement).innerText?.slice(0, 500),
+      text: (el.querySelector("[slot='comment']") as HTMLElement | null)?.innerText || (el as HTMLElement).innerText?.slice(0, 500),
       authorHandle: el.getAttribute("author") || undefined,
       authorName: el.getAttribute("author") || undefined,
       publishedAt: whenOf(el),
@@ -147,11 +131,11 @@ function extractRdCards(): {
     const text = (el.querySelector(".md") as HTMLElement | null)?.innerText;
     const outbound = outboundOf(el, url);
     cards.push({
-      externalId: id,
+      id: id,
       contentType: isComment ? "comment" : "post",
       url,
       title: (el.querySelector("a.title") as HTMLElement | null)?.innerText || (isComment ? "Comment" : undefined),
-      body: [text, outbound].filter(Boolean).join("\n") || undefined,
+      text: [text, outbound].filter(Boolean).join("\n") || undefined,
       authorHandle: el.getAttribute("data-author") || undefined,
       authorName: el.getAttribute("data-author") || undefined,
       publishedAt: whenOf(el) || parseRedditTime(el.getAttribute("data-timestamp")),
@@ -163,7 +147,7 @@ function extractRdCards(): {
 
 function extractRdOpened(): {
   title?: string;
-  body?: string;
+  text?: string;
   authorName?: string;
   authorHandle?: string;
   publishedAt?: string;
@@ -185,7 +169,7 @@ function extractRdOpened(): {
     const el = document.querySelector("shreddit-profile-comment, shreddit-comment");
     return {
       title: "Comment",
-      body: ((el?.querySelector("[slot='comment']") as HTMLElement | null)?.innerText || (el as HTMLElement | null)?.innerText || "")
+      text: ((el?.querySelector("[slot='comment']") as HTMLElement | null)?.innerText || (el as HTMLElement | null)?.innerText || "")
         .trim()
         .slice(0, 800) || undefined,
       authorHandle: el?.getAttribute("author") || undefined,
@@ -206,7 +190,7 @@ function extractRdOpened(): {
   }
   return {
     title: el?.getAttribute("post-title") || undefined,
-    body: [text, outbound].filter(Boolean).join("\n\n") || undefined,
+    text: [text, outbound].filter(Boolean).join("\n\n") || undefined,
     authorHandle: el?.getAttribute("author") || undefined,
     authorName: el?.getAttribute("author") || undefined,
     publishedAt: parseRedditTime(
@@ -241,34 +225,28 @@ export const redditPack: SitePack = {
   },
   pageState: (ctx) => ctx.evaluate(rdState),
   accountId: (ctx) => ctx.evaluate(rdAccount),
-  async *capture(request, ctx: CaptureContext): AsyncGenerator<CaptureBatchV1> {
-    const maxItems = request.maxItems ?? 300;
-    const found: ReturnType<typeof extractRdCards> = [];
-    const seen = new Set<string>();
-    let stagnant = 0;
-    let ticks = 0;
-    while (!ctx.cancelled() && seen.size < maxItems && stagnant < 6 && ticks < 80) {
-      ticks += 1;
-      const batch = await ctx.evaluate(extractRdCards);
-      const fresh = batch.filter((c) => !seen.has(c.externalId));
-      for (const c of fresh) {
-        seen.add(c.externalId);
-        found.push(c);
-      }
-      if (fresh.length === 0) stagnant += 1;
-      else stagnant = 0;
-      if (await ctx.evaluate(rdEmpty)) break;
-      await ctx.scrollBy(1600);
-      await ctx.wait(800);
+  async *readList(ctx: CaptureContext, knownIds: string[] = []) {
+    const found: Post[] = [];
+    for await (const card of scanList(ctx, extractRdCards, { empty: rdEmpty, known: new Set(knownIds) })) {
+      found.push(card);
     }
-    let sequence = 0;
     for (const card of found) {
       if (ctx.cancelled()) break;
       await ctx.goto(card.url);
       await ctx.wait(800);
       const rich = await ctx.evaluate(extractRdOpened);
-      sequence += 1;
-      yield cardsToBatch("pending", sequence, [{ ...card, ...rich, url: card.url, externalId: card.externalId }], sequence - 1);
+      yield { ...card, ...rich, url: card.url, id: card.id };
     }
+  },
+  async readPage(ctx: CaptureContext): Promise<Post | null> {
+    const url = await ctx.url();
+    const comment = url.match(/comment\/([a-z0-9]+)/i);
+    const post = url.match(/comments\/([a-z0-9]+)/i);
+    if (!comment && !post) return null;
+    const rich = await ctx.evaluate(extractRdOpened);
+    if (comment) {
+      return { id: `t1_${comment[1]}`, contentType: "comment", url, title: "Comment", ...rich };
+    }
+    return { id: `t3_${post![1]}`, contentType: "post", url, ...rich };
   },
 };

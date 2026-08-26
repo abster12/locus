@@ -46,6 +46,7 @@ export async function launchCaptureBrowser(profileDir: string): Promise<{
   };
 }
 
+/** The Chrome Locus opens (not the user's everyday browser). Pack talks only through this. */
 export function pageContext(page: Page, cancelled: () => boolean): CaptureContext {
   return {
     url: () => Promise.resolve(page.url()),

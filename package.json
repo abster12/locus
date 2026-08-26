@@ -5,9 +5,10 @@
   "type": "module",
   "description": "Local-first dashboard for personal social-media bookmarks and saves",
   "scripts": {
-    "dev": "node --experimental-sqlite --import tsx server/main.ts",
+    "dev": "tsx scripts/build-extension.ts && node --experimental-sqlite --import tsx server/main.ts",
     "start": "NODE_ENV=production node --experimental-sqlite --import tsx server/main.ts",
-    "build": "vite build",
+    "build": "vite build && tsx scripts/build-extension.ts",
+    "build:extension": "tsx scripts/build-extension.ts",
     "test": "node --experimental-sqlite --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

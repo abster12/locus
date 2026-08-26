@@ -6,7 +6,7 @@ import { createCaptureClient } from "../packages/capture-client/index.ts";
 import { packFor } from "../site-packs/index.ts";
 import { listYoutubePlaylists } from "../site-packs/youtube/index.ts";
 import { launchCaptureBrowser, pageContext } from "./chrome.ts";
-import type { PageState } from "../site-packs/shared.ts";
+import type { PageState, Post } from "../site-packs/shared.ts";
 
 export interface RunnerProgress {
   source: SourceId;
@@ -173,6 +173,7 @@ async function run(
     }
 
     const accountExternalId = (await pack.accountId(ctx)) ?? `pending:${args.accountId}`;
+    const known = await fetchKnown(args.baseUrl, args.token, args.source);
     const jobs =
       args.source === "youtube"
         ? await youtubeJobs(ctx, pack.manifest, args.extraPlaylists)
@@ -190,9 +191,6 @@ async function run(
 
     for (const job of jobs) {
       if (signal.aborted) break;
-      if (!ctx.url().then) {
-        // keep type happy
-      }
       const current = await ctx.url();
       if (current !== job.url) await ctx.goto(job.url);
       await ctx.wait(800);
@@ -262,14 +260,41 @@ async function run(
 
       let seq = 0;
       let jobSeen = 0;
-      for await (const batch of pack.capture({ mode: "incremental", maxItems: 300 }, ctx)) {
-        if (signal.aborted) break;
+      let pending: Post[] = [];
+      const flush = async () => {
+        if (pending.length === 0) return;
         seq += 1;
-        const payload = { ...batch, sessionId: started.sessionId, sequence: seq, idempotencyKey: `${started.sessionId}:${seq}` };
-        const result = await client.batch(payload);
-        jobSeen += batch.changes.length;
-        totalSeen += batch.changes.length;
+        const start = jobSeen - pending.length;
+        const result = await client.batch({
+          sessionId: started.sessionId,
+          sequence: seq,
+          idempotencyKey: `${started.sessionId}:${seq}`,
+          changes: pending.map((post, i) => ({
+            kind: "upsert" as const,
+            externalId: post.id,
+            sourcePosition: start + i,
+            item: {
+              contentType: post.contentType,
+              title: post.title,
+              body: post.text,
+              url: post.url,
+              authorName: post.authorName,
+              authorHandle: post.authorHandle,
+              publishedAt: post.publishedAt,
+              media: post.media,
+            },
+          })),
+        });
         totalUpserted += result.upserted;
+        pending = [];
+      };
+      // Pack yields posts. We wrap them as Capture Protocol batches.
+      for await (const post of pack.readList(ctx, known)) {
+        if (signal.aborted) break;
+        pending.push(post);
+        jobSeen += 1;
+        totalSeen += 1;
+        if (pending.length >= 8) await flush();
         set({
           phase: "capturing",
           message: `Captured ${totalSeen} records…`,
@@ -277,7 +302,8 @@ async function run(
           upserted: totalUpserted,
         });
       }
-      const coverage = signal.aborted || jobSeen >= 60 ? "partial" : "complete";
+      await flush();
+      const coverage = "partial";
       if (coverage === "partial") anyPartial = true;
       await client.finish({ sessionId: started.sessionId, coverage });
     }
@@ -405,6 +431,18 @@ async function youtubeJobs(
     // Watch Later still counts
   }
   return jobs;
+}
+
+async function fetchKnown(baseUrl: string, token: string, source: SourceId): Promise<string[]> {
+  try {
+    const res = await fetch(`${baseUrl}/capture/v1/known?source=${encodeURIComponent(source)}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json().catch(() => ({}))) as { done?: unknown };
+    return Array.isArray(data.done) ? data.done.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function label(source: SourceId): string {

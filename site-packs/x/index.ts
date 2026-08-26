@@ -1,17 +1,8 @@
-import type { CaptureBatchV1 } from "../../packages/protocol/types.ts";
-import { cardsToBatch, type CaptureContext, type CaptureRequest, type PageContext, type SitePack } from "../shared.ts";
+// X Bookmarks. extract* is injected into the tab; readList / readPage run in the producer.
+import { scanList, type CaptureContext, type PageContext, type Post, type SitePack } from "../shared.ts";
 
-function extractXCards(): {
-  externalId: string;
-  contentType: "post" | "thread";
-  url: string;
-  title?: string;
-  body?: string;
-  authorName?: string;
-  authorHandle?: string;
-  publishedAt?: string;
-  media?: { kind: string; url: string }[];
-}[] {
+// Runs inside the tab via evaluate(). Must stay self-contained (no module locals).
+function extractXCards(): Post[] {
   const tweetBody = (el: Element) => {
     const textEl = el.querySelector('[data-testid="tweetText"]');
     if (!textEl) return undefined;
@@ -104,7 +95,7 @@ function extractXCards(): {
     }
     return media.slice(0, 8);
   };
-  const cards: ReturnType<typeof extractXCards> = [];
+  const cards: Post[] = [];
   const articles = document.querySelectorAll('article[data-testid="tweet"], article[data-testid="cellInnerDiv"] article');
   for (const el of articles) {
     const links = [...el.querySelectorAll("a[href*='/status/']")];
@@ -129,10 +120,10 @@ function extractXCards(): {
       body = body ? `${body}\n${u}` : u;
     }
     cards.push({
-      externalId: status,
+      id: status,
       contentType: "post",
       url,
-      body,
+      text: body,
       authorName: tweetName(el),
       authorHandle: tweetHandle(el, url),
       publishedAt: el.querySelector("time")?.getAttribute("datetime") || undefined,
@@ -156,14 +147,13 @@ function xState(): "logged-out" | "challenge" | "empty" | "ready" | "loading" | 
   if (document.querySelector('[data-testid="loginButton"], a[href="/login"]') && !document.querySelector('[data-testid="AppTabBar_Home_Link"]')) {
     return "logged-out";
   }
+  // Homepage has tweets too — URL must be Bookmarks / History.
+  if (!/\/i\/(bookmarks|history)(\?|$|\/)/.test(url)) return "wrong-page";
   if (/you haven.t added any posts to your bookmarks|save posts for later|you haven.t (bookmarked|saved) any/i.test(text)) {
     return "empty";
   }
   if (document.querySelector('article[data-testid="tweet"]')) return "ready";
-  if (document.querySelector('[data-testid="AppTabBar_Home_Link"]')) {
-    if (!/\/i\/(bookmarks|history)/.test(url)) return "wrong-page";
-    return "loading";
-  }
+  if (document.querySelector('[data-testid="AppTabBar_Home_Link"]')) return "loading";
   return "unknown";
 }
 
@@ -219,32 +209,14 @@ export const xPack: SitePack = {
   async accountId(ctx) {
     return ctx.evaluate(xAccount);
   },
-  async *capture(request: CaptureRequest, ctx: CaptureContext): AsyncGenerator<CaptureBatchV1> {
-    const maxItems = request.maxItems ?? 60;
-    const seen = new Map<string, ReturnType<typeof extractXCards>[number]>();
-    let stagnant = 0;
-    let sequence = 0;
-    let ticks = 0;
-    while (!ctx.cancelled() && seen.size < maxItems && stagnant < 6 && ticks < 80) {
-      ticks += 1;
-      const batch = await ctx.evaluate(extractXCards);
-      const fresh = [];
-      for (const card of batch) {
-        if (seen.has(card.externalId)) continue;
-        seen.set(card.externalId, card);
-        fresh.push(card);
-        if (seen.size >= maxItems) break;
-      }
-      if (fresh.length === 0) stagnant += 1;
-      else {
-        stagnant = 0;
-        sequence += 1;
-        yield cardsToBatch("pending", sequence, fresh, seen.size - fresh.length);
-      }
-      if (seen.size >= maxItems) break;
-      if (await ctx.evaluate(xEmpty)) break;
-      await ctx.scrollBy(1600);
-      await ctx.wait(800);
-    }
+  async *readList(ctx: CaptureContext, knownIds: string[] = []) {
+    yield* scanList(ctx, extractXCards, { empty: xEmpty, known: new Set(knownIds) });
+  },
+  async readPage(ctx: CaptureContext): Promise<Post | null> {
+    const url = await ctx.url();
+    const id = url.match(/status\/(\d+)/)?.[1];
+    if (!id) return null;
+    const cards = await ctx.evaluate(extractXCards);
+    return cards.find((c) => c.id === id) ?? cards[0] ?? null;
   },
 };

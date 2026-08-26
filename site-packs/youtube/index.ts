@@ -1,5 +1,5 @@
-import type { CaptureBatchV1 } from "../../packages/protocol/types.ts";
-import { cardsToBatch, type CaptureContext, type CaptureRequest, type SitePack } from "../shared.ts";
+// YouTube Watch Later / playlists. List page is enough — no per-video open.
+import { scanList, type CaptureContext, type Post, type SitePack } from "../shared.ts";
 
 function ytState(): "logged-out" | "challenge" | "empty" | "ready" | "loading" | "wrong-page" | "unknown" {
   const url = location.href;
@@ -9,12 +9,13 @@ function ytState(): "logged-out" | "challenge" | "empty" | "ready" | "loading" |
     return "logged-out";
   }
   if (/unusual traffic|are you a robot|recaptcha/i.test(text) && document.querySelector("iframe[src*='recaptcha']")) return "challenge";
+  // Home / watch also have video renderers — only a playlist page counts.
+  if (!/youtube\.com\/playlist\?list=/.test(url)) return "wrong-page";
   if (/no videos in this playlist|watch later is empty/i.test(text)) return "empty";
   if (document.querySelector("ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-rich-item-renderer a#video-title-link")) {
     return "ready";
   }
-  if (/playlist\?list=/.test(url) || /\/feed\/playlists/.test(url)) return "loading";
-  return "unknown";
+  return "loading";
 }
 
 function ytAccount(): string | null {
@@ -26,28 +27,13 @@ function ytAccount(): string | null {
   return avatar ? "signed-in" : null;
 }
 
-function extractYtCards(): {
-  externalId: string;
-  contentType: "video";
-  url: string;
-  title?: string;
-  authorName?: string;
-  authorHandle?: string;
-  publishedAt?: string;
-}[] {
+// Runs inside the tab via evaluate(). Must stay self-contained (no module locals).
+function extractYtCards(): Post[] {
   const pageV = new URL(location.href).searchParams.get("v");
   const pageDate =
     document.querySelector('meta[itemprop="datePublished"], meta[itemprop="uploadDate"]')?.getAttribute("content") ||
     undefined;
-  const cards: {
-    externalId: string;
-    contentType: "video";
-    url: string;
-    title?: string;
-    authorName?: string;
-    authorHandle?: string;
-    publishedAt?: string;
-  }[] = [];
+  const cards: Post[] = [];
   const rows = document.querySelectorAll("ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer");
   for (const row of rows) {
     const a = row.querySelector("a#video-title, a.yt-simple-endpoint[href*='watch']") as HTMLAnchorElement | null;
@@ -58,7 +44,7 @@ function extractYtCards(): {
     const by = (row.querySelector("ytd-channel-name, .yt-simple-endpoint.yt-formatted-string") as HTMLElement | null)
       ?.innerText?.trim();
     cards.push({
-      externalId: m[1],
+      id: m[1],
       contentType: "video",
       url: `https://www.youtube.com/watch?v=${m[1]}`,
       title,
@@ -73,7 +59,7 @@ function extractYtCards(): {
       const m = href.match(/[?&]v=([a-zA-Z0-9_-]{6,})/);
       if (!m?.[1]) continue;
       cards.push({
-        externalId: m[1],
+        id: m[1],
         contentType: "video",
         url: `https://www.youtube.com/watch?v=${m[1]}`,
         title: (a.textContent || "").trim() || undefined,
@@ -96,6 +82,20 @@ function extractPlaylists(): { id: string; name: string; url: string }[] {
     out.push({ id: m[1], name, url: `https://www.youtube.com/playlist?list=${m[1]}` });
   }
   return out;
+}
+
+function extractYtCurrent(): Post | null {
+  const id = new URL(location.href).searchParams.get("v");
+  if (!id) return null;
+  return {
+    id,
+    contentType: "video",
+    url: `https://www.youtube.com/watch?v=${id}`,
+    title: document.title.replace(/ - YouTube$/, "") || undefined,
+    publishedAt:
+      document.querySelector('meta[itemprop="datePublished"], meta[itemprop="uploadDate"]')?.getAttribute("content") ||
+      undefined,
+  };
 }
 
 function ytEmpty(): boolean {
@@ -128,32 +128,11 @@ export const youtubePack: SitePack = {
   },
   pageState: (ctx) => ctx.evaluate(ytState),
   accountId: (ctx) => ctx.evaluate(ytAccount),
-  async *capture(request: CaptureRequest, ctx: CaptureContext): AsyncGenerator<CaptureBatchV1> {
-    yield* scanPlaylist(ctx, request.maxItems ?? 60);
+  async *readList(ctx: CaptureContext, knownIds: string[] = []) {
+    yield* scanList(ctx, extractYtCards, { empty: ytEmpty, known: new Set(knownIds) });
   },
+  readPage: (ctx) => ctx.evaluate(extractYtCurrent),
 };
-
-export async function* scanPlaylist(ctx: CaptureContext, maxItems: number): AsyncGenerator<CaptureBatchV1> {
-  const seen = new Set<string>();
-  let stagnant = 0;
-  let sequence = 0;
-  let ticks = 0;
-  while (!ctx.cancelled() && seen.size < maxItems && stagnant < 6 && ticks < 80) {
-    ticks += 1;
-    const batch = await ctx.evaluate(extractYtCards);
-    const fresh = batch.filter((c) => !seen.has(c.externalId));
-    for (const c of fresh) seen.add(c.externalId);
-    if (fresh.length === 0) stagnant += 1;
-    else {
-      stagnant = 0;
-      sequence += 1;
-      yield cardsToBatch("pending", sequence, fresh, seen.size - fresh.length);
-    }
-    if (await ctx.evaluate(ytEmpty)) break;
-    await ctx.scrollBy(1400);
-    await ctx.wait(700);
-  }
-}
 
 export async function listYoutubePlaylists(ctx: CaptureContext): Promise<{ id: string; name: string; url: string }[]> {
   await ctx.goto("https://www.youtube.com/feed/playlists");

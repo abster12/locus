@@ -1,4 +1,8 @@
-import { detectListState, extractCurrent, extractPage } from "./extract.js";
+// Everyday Chrome (the user's browser). Pairing + jobs live here.
+// Site-pack logic is in pack.js (built from site-packs/). This file only:
+//   - implements CaptureContext with chrome.tabs / chrome.scripting
+//   - talks Capture Protocol to the desk (sessions, batches)
+import { packFor, packForUrl } from "./pack.js";
 
 let listening = false;
 chrome.runtime.onInstalled.addListener(() => {
@@ -10,11 +14,18 @@ chrome.runtime.onStartup.addListener(() => {
 listen();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type !== "import-page") return;
-  runImport(msg)
-    .then((text) => sendResponse({ ok: true, text }))
-    .catch((e) => sendResponse({ ok: false, text: e instanceof Error ? e.message : String(e) }));
-  return true;
+  if (msg?.type === "import-page") {
+    runImport(msg)
+      .then((text) => sendResponse({ ok: true, text }))
+      .catch((e) => sendResponse({ ok: false, text: e instanceof Error ? e.message : String(e) }));
+    return true;
+  }
+  if (msg?.type === "save-item") {
+    runSaveItem(msg)
+      .then((text) => sendResponse({ ok: true, text }))
+      .catch((e) => sendResponse({ ok: false, text: e instanceof Error ? e.message : String(e) }));
+    return true;
+  }
 });
 
 function say(text) {
@@ -39,9 +50,44 @@ function waitTab(tabId) {
   });
 }
 
-async function inject(tabId, fn) {
-  const [got] = await chrome.scripting.executeScript({ target: { tabId }, func: fn });
-  return got?.result;
+/**
+ * CaptureContext for this Chrome. evaluate() injects a pack function into the tab.
+ * goto() opens a background tab so Connect does not leave the user's saved list
+ * (Instagram / Reddit open each new post).
+ */
+function tabContext(listTabId, cancelled) {
+  let currentTabId = listTabId;
+  let workTabId = null;
+  return {
+    url: async () => (await chrome.tabs.get(currentTabId)).url,
+    title: async () => (await chrome.tabs.get(currentTabId)).title,
+    evaluate: async (fn) => {
+      const [got] = await chrome.scripting.executeScript({ target: { tabId: currentTabId }, func: fn });
+      return got?.result;
+    },
+    goto: async (url) => {
+      if (currentTabId === listTabId) {
+        const t = await chrome.tabs.create({ url, active: false });
+        currentTabId = t.id;
+        workTabId = t.id;
+      } else {
+        await chrome.tabs.update(currentTabId, { url });
+      }
+      await waitTab(currentTabId);
+    },
+    scrollBy: async (y) => {
+      await chrome.scripting.executeScript({
+        target: { tabId: currentTabId },
+        func: (dy) => window.scrollBy(0, dy),
+        args: [y],
+      });
+    },
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    cancelled,
+    dispose: async () => {
+      if (workTabId) await chrome.tabs.remove(workTabId).catch(() => {});
+    },
+  };
 }
 
 async function postJson(origin, token, path, body) {
@@ -63,28 +109,31 @@ async function getKnown(origin, token, source) {
   return Array.isArray(data.done) ? data.done : [];
 }
 
-async function scrapeAway(url) {
-  const tab = await chrome.tabs.create({ url, active: false });
-  try {
-    await waitTab(tab.id);
-    return await inject(tab.id, extractCurrent);
-  } finally {
-    if (tab.id) await chrome.tabs.remove(tab.id).catch(() => {});
-  }
+function postToChange(post, i) {
+  return {
+    kind: "upsert",
+    externalId: post.id,
+    sourcePosition: i,
+    item: {
+      contentType: post.contentType,
+      title: post.title,
+      body: post.text,
+      url: post.url,
+      authorName: post.authorName,
+      authorHandle: post.authorHandle,
+      publishedAt: post.publishedAt,
+      media: post.media,
+    },
+  };
 }
 
-async function flush(origin, token, sessionId, sequence, cards) {
-  if (cards.length === 0) return sequence;
+async function flush(origin, token, sessionId, sequence, posts, start) {
+  if (posts.length === 0) return sequence;
   await postJson(origin, token, "/capture/v1/batches", {
     sessionId,
     sequence,
     idempotencyKey: `${sessionId}:${sequence}`,
-    changes: cards.map((card, i) => ({
-      kind: "upsert",
-      externalId: card.externalId,
-      sourcePosition: i,
-      item: card.item,
-    })),
+    changes: posts.map((post, i) => postToChange(post, start + i)),
   });
   return sequence + 1;
 }
@@ -137,79 +186,98 @@ async function runJob(origin, token, job) {
     phase: "waiting-login",
     message: "Waiting for the saved page. Log in if the site asks.",
   });
+  const pack = packFor(job.source);
   const tab = await chrome.tabs.create({ url: job.url, active: true });
+  const stop = { v: false };
+  const poll = setInterval(() => {
+    jobCancelled(origin, token, job.id).then((c) => {
+      if (c) stop.v = true;
+    });
+  }, 1000);
+  const ctx = tabContext(tab.id, () => stop.v);
   try {
     for (let i = 0; i < 1800; i++) {
-      if (await jobCancelled(origin, token, job.id)) throw new Error("cancelled");
-      const state = await inject(tab.id, detectListState).catch(() => "unknown");
-      if (state === "ready" || (i > 30 && state === "loading")) break;
+      if (stop.v || (await jobCancelled(origin, token, job.id))) throw new Error("cancelled");
+      const state = await pack.pageState(ctx).catch(() => "unknown");
+      if (state === "ready" || state === "empty") break;
+      if (i > 30 && state === "loading") break;
       await new Promise((r) => setTimeout(r, 2000));
     }
-    const text = await runImport({ tabId: tab.id, tabUrl: job.url, origin, token });
+    const text = await runImport({ tabId: tab.id, tabUrl: job.url, origin, token, pack, ctx });
     await postJson(origin, token, `/capture/v1/jobs/${job.id}/finish`, { message: text });
     say(text);
   } finally {
+    clearInterval(poll);
     // leave the tab — user may still be looking at it
   }
 }
 
-async function runImport(msg) {
+async function runSaveItem(msg) {
   const { tabId, tabUrl, origin, token } = msg;
-  say("Scrolling to load every saved post…");
-  const listed = await inject(tabId, extractPage);
-  if (!listed) throw new Error("This page is not a known saved-items or post page.");
-  const startCards = listed.cards || (listed.externalId ? [{ externalId: listed.externalId, item: listed.item }] : []);
-  if (startCards.length === 0) {
-    return "No records on this page.";
-  }
-  const done = new Set(await getKnown(origin, token, listed.source));
-  const need = startCards.filter((c) => !done.has(c.externalId));
-  const skipped = startCards.length - need.length;
-
+  const pack = packForUrl(tabUrl);
+  if (!pack) throw new Error("This page is not a known post.");
+  const ctx = tabContext(tabId, () => false);
+  const post = await pack.readPage(ctx);
+  if (!post) throw new Error("This page is not a known post.");
+  const account = (await pack.accountId(ctx).catch(() => null)) || "pending";
   const session = await postJson(origin, token, "/capture/v1/sessions", {
     protocolVersion: 1,
-    source: listed.source,
+    source: pack.manifest.id,
     producer: { id: "locus.extension", version: "0.1.0" },
-    accountExternalId: listed.account || "pending",
-    collection: { externalId: listed.collection, name: listed.collectionName, url: tabUrl },
+    accountExternalId: account,
+    collection: {
+      externalId: pack.manifest.collectionExternalId,
+      name: pack.manifest.collectionName,
+      url: tabUrl,
+    },
     mode: "incremental",
     observedAt: new Date().toISOString(),
   });
+  await flush(origin, token, session.sessionId, 1, [post], 0);
+  await postJson(origin, token, "/capture/v1/finish", { sessionId: session.sessionId, coverage: "partial" });
+  return "Saved 1 record to Locus.";
+}
 
-  const walk = listed.source === "instagram" || listed.source === "reddit";
-  let sequence = 1;
-  let pending = [];
-  let saved = 0;
-  const push = async (card) => {
-    pending.push(card);
-    saved += 1;
-    if (pending.length >= 8) {
-      sequence = await flush(origin, token, session.sessionId, sequence, pending);
-      pending = [];
-    }
-  };
+async function runImport(msg) {
+  const { tabId, tabUrl, origin, token } = msg;
+  const pack = msg.pack || packForUrl(tabUrl);
+  if (!pack) throw new Error("This page is not a known saved-items or post page.");
+  const target = pack.detect({ url: tabUrl, title: "" });
+  if (!target || target.kind !== "collection") throw new Error("This page is not a known saved-items or post page.");
 
-  if (!walk) {
-    sequence = await flush(origin, token, session.sessionId, sequence, startCards);
-    saved = startCards.length;
-  } else if (need.length === 0) {
-    saved = 0;
-  } else {
-    say(`${need.length} to read, ${skipped} already saved. Your tab stays put.`);
-    for (let i = 0; i < need.length; i++) {
-      const skinny = need[i];
-      say(`Reading ${i + 1}/${need.length} in the background…`);
-      try {
-        const one = await scrapeAway(skinny.item.url);
-        await push(one?.item ? { externalId: one.externalId || skinny.externalId, item: { ...skinny.item, ...one.item } } : skinny);
-      } catch {
-        await push(skinny);
+  say("Scrolling to load every saved post…");
+  const ctx = msg.ctx || tabContext(tabId, () => false);
+  try {
+    const account = (await pack.accountId(ctx).catch(() => null)) || "pending";
+    const known = await getKnown(origin, token, pack.manifest.id);
+    const posts = [];
+    for await (const post of pack.readList(ctx, known)) posts.push(post);
+    if (posts.length === 0) return known.length ? "Nothing new to save." : "No records on this page.";
+    const session = await postJson(origin, token, "/capture/v1/sessions", {
+      protocolVersion: 1,
+      source: pack.manifest.id,
+      producer: { id: "locus.extension", version: "0.1.0" },
+      accountExternalId: account,
+      collection: { externalId: target.collectionExternalId, name: target.collectionName, url: tabUrl },
+      mode: "incremental",
+      observedAt: new Date().toISOString(),
+    });
+
+    let sequence = 1;
+    let pending = [];
+    let sent = 0;
+    for (const post of posts) {
+      pending.push(post);
+      if (pending.length >= 8) {
+        sequence = await flush(origin, token, session.sessionId, sequence, pending, sent);
+        sent += pending.length;
+        pending = [];
       }
     }
+    await flush(origin, token, session.sessionId, sequence, pending, sent);
+    await postJson(origin, token, "/capture/v1/finish", { sessionId: session.sessionId, coverage: "partial" });
+    return `Saved ${posts.length} record(s) to Locus.${known.length ? ` Skipped already saved.` : ""}`;
+  } finally {
+    await ctx.dispose();
   }
-
-  sequence = await flush(origin, token, session.sessionId, sequence, pending);
-  await postJson(origin, token, "/capture/v1/finish", { sessionId: session.sessionId, coverage: "partial" });
-  const extra = skipped ? ` Skipped ${skipped} already saved.` : "";
-  return `Saved ${saved} record(s) to Locus.${extra}`;
 }

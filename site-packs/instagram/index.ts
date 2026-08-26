@@ -1,5 +1,5 @@
-import type { CaptureBatchV1 } from "../../packages/protocol/types.ts";
-import { cardsToBatch, type CaptureContext, type SitePack } from "../shared.ts";
+// Instagram Saved. After the grid, readList opens each *new* post for the caption.
+import { scanList, type CaptureContext, type Post, type SitePack } from "../shared.ts";
 
 function igState(): "logged-out" | "challenge" | "empty" | "ready" | "loading" | "wrong-page" | "unknown" {
   const url = location.href;
@@ -10,10 +10,11 @@ function igState(): "logged-out" | "challenge" | "empty" | "ready" | "loading" |
   if (/log in to instagram|sign up/i.test(text) && document.querySelector('input[name="username"], input[name="password"]')) {
     return "logged-out";
   }
+  // Feed also has /p/ and /reel/ links — only Saved counts.
+  if (!/instagram\.com\/(saves|[^/]+\/saved)/.test(url)) return "wrong-page";
   if (/only you can see what you.ve saved|no saved posts/i.test(text)) return "empty";
   if (document.querySelector("a[href*='/p/'], a[href*='/reel/']")) return "ready";
-  if (/\/saved|\/saves/.test(url)) return "loading";
-  return "unknown";
+  return "loading";
 }
 
 function igAccount(): string | null {
@@ -27,41 +28,24 @@ function igAccount(): string | null {
   return null;
 }
 
-function extractIgCards(): {
-  externalId: string;
-  contentType: "post" | "reel";
-  url: string;
-  title?: string;
-  authorName?: string;
-  authorHandle?: string;
-  publishedAt?: string;
-  media?: { kind: string; url: string }[];
-}[] {
+// Runs inside the tab via evaluate(). Must stay self-contained (no module locals).
+function extractIgCards(): Post[] {
   const pageCode = location.pathname.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/)?.[2];
   const pageDate = document.querySelector("time[datetime]")?.getAttribute("datetime") || undefined;
-  const cards: {
-    externalId: string;
-    contentType: "post" | "reel";
-    url: string;
-    title?: string;
-    authorName?: string;
-    authorHandle?: string;
-    publishedAt?: string;
-    media?: { kind: string; url: string }[];
-  }[] = [];
+  const cards: Post[] = [];
   for (const a of document.querySelectorAll("a[href*='/p/'], a[href*='/reel/']")) {
     const href = (a as HTMLAnchorElement).href || a.getAttribute("href") || "";
     const post = href.match(/\/p\/([A-Za-z0-9_-]+)/);
     const reel = href.match(/\/reel\/([A-Za-z0-9_-]+)/);
     const code = post?.[1] ?? reel?.[1];
     if (!code) continue;
-    if (cards.some((c) => c.externalId === code)) continue;
+    if (cards.some((c) => c.id === code)) continue;
     const img = a.querySelector("img");
     const src = img?.currentSrc || img?.getAttribute("src") || "";
     const alt = (img?.getAttribute("alt") || "").trim();
     const by = alt.match(/^(?:Photo|Video)(?: shared)? by (.+?) on /i)?.[1]?.trim();
     cards.push({
-      externalId: code,
+      id: code,
       contentType: reel ? "reel" : "post",
       url: post ? `https://www.instagram.com/p/${code}/` : `https://www.instagram.com/reel/${code}/`,
       title: alt && !/^instagram$/i.test(alt) ? alt.slice(0, 200) : undefined,
@@ -76,7 +60,7 @@ function extractIgCards(): {
 
 function extractIgOpened(): {
   title?: string;
-  body?: string;
+  text?: string;
   authorName?: string;
   authorHandle?: string;
   publishedAt?: string;
@@ -127,7 +111,7 @@ function extractIgOpened(): {
   const publishedAt = raw && !Number.isNaN(new Date(raw).getTime()) ? new Date(raw).toISOString() : undefined;
   return {
     title: caption ? caption.slice(0, 200) : undefined,
-    body: caption || undefined,
+    text: caption || undefined,
     authorName: user,
     authorHandle: user,
     publishedAt,
@@ -161,34 +145,29 @@ export const instagramPack: SitePack = {
   },
   pageState: (ctx) => ctx.evaluate(igState),
   accountId: (ctx) => ctx.evaluate(igAccount),
-  async *capture(request, ctx: CaptureContext): AsyncGenerator<CaptureBatchV1> {
-    const maxItems = request.maxItems ?? 300;
-    const found: ReturnType<typeof extractIgCards> = [];
-    const seen = new Set<string>();
-    let stagnant = 0;
-    let ticks = 0;
-    while (!ctx.cancelled() && seen.size < maxItems && stagnant < 6 && ticks < 80) {
-      ticks += 1;
-      const batch = await ctx.evaluate(extractIgCards);
-      const fresh = batch.filter((c) => !seen.has(c.externalId));
-      for (const c of fresh) {
-        seen.add(c.externalId);
-        found.push(c);
-      }
-      if (fresh.length === 0) stagnant += 1;
-      else stagnant = 0;
-      if (await ctx.evaluate(igEmpty)) break;
-      await ctx.scrollBy(1800);
-      await ctx.wait(900);
+  async *readList(ctx: CaptureContext, knownIds: string[] = []) {
+    const found: Post[] = [];
+    for await (const card of scanList(ctx, extractIgCards, { empty: igEmpty, known: new Set(knownIds) })) {
+      found.push(card);
     }
-    let sequence = 0;
     for (const card of found) {
       if (ctx.cancelled()) break;
       await ctx.goto(card.url);
       await ctx.wait(800);
       const rich = await ctx.evaluate(extractIgOpened);
-      sequence += 1;
-      yield cardsToBatch("pending", sequence, [{ ...card, ...rich, url: card.url, externalId: card.externalId }], sequence - 1);
+      yield { ...card, ...rich, url: card.url, id: card.id };
     }
+  },
+  async readPage(ctx: CaptureContext): Promise<Post | null> {
+    const url = await ctx.url();
+    const m = url.match(/\/(p|reel)\/([A-Za-z0-9_-]+)/);
+    if (!m?.[2]) return null;
+    const rich = await ctx.evaluate(extractIgOpened);
+    return {
+      id: m[2],
+      contentType: m[1] === "reel" ? "reel" : "post",
+      url: m[1] === "reel" ? `https://www.instagram.com/reel/${m[2]}/` : `https://www.instagram.com/p/${m[2]}/`,
+      ...rich,
+    };
   },
 };

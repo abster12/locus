@@ -1,5 +1,4 @@
-import type { CaptureBatchV1 } from "../packages/protocol/types.ts";
-import type { SourceId } from "../core/types.ts";
+import type { ContentType, SourceId } from "../core/types.ts";
 
 export type PageState =
   | "logged-out"
@@ -24,11 +23,10 @@ export interface CaptureTarget {
   accountExternalId?: string;
 }
 
-export interface CaptureRequest {
-  mode: "incremental" | "snapshot";
-  maxItems?: number;
-}
-
+/**
+ * What a producer (extension SW or runner) must give the pack.
+ * The pack never talks to Chrome itself — it only calls these.
+ */
 export interface CaptureContext {
   url(): Promise<string>;
   title(): Promise<string>;
@@ -39,12 +37,13 @@ export interface CaptureContext {
   cancelled(): boolean;
 }
 
-export interface ExtractedCard {
-  externalId: string;
-  contentType: "post" | "thread" | "reel" | "video" | "comment" | "link";
+/** One saved post. Desk messages (sessions / batches) are the producer's job. */
+export interface Post {
+  id: string;
   url: string;
+  text?: string;
   title?: string;
-  body?: string;
+  contentType: ContentType;
   authorName?: string;
   authorHandle?: string;
   publishedAt?: string;
@@ -64,63 +63,58 @@ export interface SitePack {
   detect(page: PageContext): CaptureTarget | null;
   pageState(ctx: CaptureContext): Promise<PageState>;
   accountId(ctx: CaptureContext): Promise<string | null>;
-  capture(request: CaptureRequest, context: CaptureContext): AsyncIterable<CaptureBatchV1>;
+  /** Connect — scroll the saved list. Skip ids the desk already has. */
+  readList(ctx: CaptureContext, knownIds?: string[]): AsyncIterable<Post>;
+  /** Save this item — read the current post page only. */
+  readPage(ctx: CaptureContext): Promise<Post | null>;
 }
 
-export async function collectCards(
+/**
+ * Runs inside the tab. Finds the list's own scroll box (X/IG often
+ * are not `window`) and jumps to the bottom so more cards load.
+ */
+export function scrollList(): void {
+  const first = document.querySelector(
+    'article[data-testid="tweet"], ytd-playlist-video-renderer, shreddit-post, shreddit-profile-comment, a[href*="/p/"], a[href*="/reel/"]',
+  );
+  let n = first as HTMLElement | null;
+  while (n && n !== document.body && n !== document.documentElement) {
+    const s = getComputedStyle(n);
+    if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 40) {
+      n.scrollTop = n.scrollHeight;
+      return;
+    }
+    n = n.parentElement;
+  }
+  const box = document.scrollingElement || document.documentElement;
+  box.scrollTo(0, document.body?.scrollHeight ?? box.scrollHeight);
+}
+
+/** Scroll until the list stops growing. Yields only posts not in `known`. */
+export async function* scanList(
   ctx: CaptureContext,
-  extract: () => ExtractedCard[],
-  args: { emptyText: () => boolean; maxItems: number; sessionId: string },
-): Promise<{ cards: ExtractedCard[]; coverage: "complete" | "partial"; empty: boolean }> {
-  const seen = new Map<string, ExtractedCard>();
+  extract: () => Post[],
+  args: { empty: () => boolean; known?: Set<string> },
+): AsyncGenerator<Post> {
+  const seen = new Set<string>();
+  const skip = args.known ?? new Set<string>();
   let stagnant = 0;
   let ticks = 0;
-  while (!ctx.cancelled() && seen.size < args.maxItems && stagnant < 6 && ticks < 80) {
+  // ponytail: 400-tick ceiling so a broken scroller cannot loop forever
+  while (!ctx.cancelled() && stagnant < 8 && ticks < 400) {
     ticks += 1;
     const batch = await ctx.evaluate(extract);
     let added = 0;
-    for (const card of batch) {
-      if (!card.externalId || seen.has(card.externalId)) continue;
-      seen.set(card.externalId, card);
+    for (const post of batch) {
+      if (!post.id || seen.has(post.id)) continue;
+      seen.add(post.id);
       added += 1;
-      if (seen.size >= args.maxItems) break;
+      if (!skip.has(post.id)) yield post;
     }
     if (added === 0) stagnant += 1;
     else stagnant = 0;
-    if (seen.size >= args.maxItems) break;
-    const empty = await ctx.evaluate(args.emptyText);
-    if (empty && seen.size === 0) return { cards: [], coverage: "complete", empty: true };
-    await ctx.scrollBy(1400);
+    if ((await ctx.evaluate(args.empty)) && seen.size === 0) break;
+    await ctx.evaluate(scrollList);
     await ctx.wait(700);
   }
-  const coverage = ctx.cancelled() || seen.size >= args.maxItems || stagnant >= 6 ? (stagnant >= 6 ? "complete" : "partial") : "partial";
-  return { cards: [...seen.values()], coverage, empty: false };
-}
-
-export function cardsToBatch(
-  sessionId: string,
-  sequence: number,
-  cards: ExtractedCard[],
-  startPosition: number,
-): CaptureBatchV1 {
-  return {
-    sessionId,
-    sequence,
-    idempotencyKey: `${sessionId}:${sequence}`,
-    changes: cards.map((card, i) => ({
-      kind: "upsert" as const,
-      externalId: card.externalId,
-      sourcePosition: startPosition + i,
-      item: {
-        contentType: card.contentType,
-        title: card.title,
-        body: card.body,
-        url: card.url,
-        authorName: card.authorName,
-        authorHandle: card.authorHandle,
-        publishedAt: card.publishedAt,
-        media: card.media,
-      },
-    })),
-  };
 }

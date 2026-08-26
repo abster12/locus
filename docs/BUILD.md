@@ -28,6 +28,8 @@ Locus does not copy that profile.
 
 ## Extension
 
+`npm run build:extension` writes `extension/shell/pack.js` from `site-packs/` (also runs from `npm run dev` / `npm run build`).
+
 1. Chrome → Extensions → Load unpacked → `extension/shell`
 2. On Sources, click **Pair extension**
 3. Paste origin + token into the popup
