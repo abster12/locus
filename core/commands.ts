@@ -1,12 +1,37 @@
 import type { Db } from "../db/open.ts";
 import { newId, nowIso, tx } from "../db/open.ts";
 import { isItemStatus, type ItemStatus } from "./types.ts";
-import { sanitizeText } from "./sanitize.ts";
+import { RejectedPayload, sanitizeText } from "./sanitize.ts";
+
+export class MissingResource extends Error {
+  readonly code = "not-found";
+
+  constructor(resource: string) {
+    super(`${resource} not found`);
+    this.name = "MissingResource";
+  }
+}
+
+function requireItem(db: Db, itemId: string): void {
+  const row = db.prepare(`SELECT 1 FROM items WHERE id = ?`).get(itemId);
+  if (!row) throw new MissingResource("item");
+}
+
+function requireTag(db: Db, tagId: string): void {
+  const row = db.prepare(`SELECT 1 FROM tags WHERE id = ?`).get(tagId);
+  if (!row) throw new MissingResource("tag");
+}
+
+function requireCollection(db: Db, collectionId: string): void {
+  const row = db.prepare(`SELECT 1 FROM collections WHERE id = ?`).get(collectionId);
+  if (!row) throw new MissingResource("collection");
+}
 
 export function setStatus(db: Db, itemId: string, status: ItemStatus, snoozedUntil?: string): void {
-  if (!isItemStatus(status)) throw new Error("invalid status");
+  if (!isItemStatus(status)) throw new RejectedPayload("invalid status");
   const until = status === "snoozed" ? (snoozedUntil ?? new Date(Date.now() + 86400000).toISOString()) : null;
   tx(db, () => {
+    requireItem(db, itemId);
     db.prepare(
       `INSERT INTO item_state (item_id, status, snoozed_until, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT(item_id) DO UPDATE SET status = excluded.status, snoozed_until = excluded.snoozed_until, updated_at = excluded.updated_at`,
@@ -16,8 +41,9 @@ export function setStatus(db: Db, itemId: string, status: ItemStatus, snoozedUnt
 
 export function addTag(db: Db, itemId: string, name: string, color?: string): { id: string; name: string } {
   const clean = sanitizeText(name, 40);
-  if (!clean) throw new Error("tag name required");
+  if (!clean) throw new RejectedPayload("tag name required");
   return tx(db, () => {
+    requireItem(db, itemId);
     const existing = db.prepare(`SELECT id, name FROM tags WHERE name = ? COLLATE NOCASE`).get(clean) as
       | { id: string; name: string }
       | undefined;
@@ -31,12 +57,16 @@ export function addTag(db: Db, itemId: string, name: string, color?: string): { 
 }
 
 export function removeTag(db: Db, itemId: string, tagId: string): void {
-  db.prepare(`DELETE FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'tag'`).run(itemId, tagId);
+  tx(db, () => {
+    requireItem(db, itemId);
+    requireTag(db, tagId);
+    db.prepare(`DELETE FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'tag'`).run(itemId, tagId);
+  });
 }
 
 export function createCollection(db: Db, name: string, description?: string): { id: string; name: string } {
   const clean = sanitizeText(name, 80);
-  if (!clean) throw new Error("collection name required");
+  if (!clean) throw new RejectedPayload("collection name required");
   const id = newId();
   db.prepare(`INSERT INTO collections (id, name, description, created_at) VALUES (?, ?, ?, ?)`).run(
     id,
@@ -48,29 +78,40 @@ export function createCollection(db: Db, name: string, description?: string): { 
 }
 
 export function addToCollection(db: Db, itemId: string, collectionId: string): void {
-  db.prepare(
-    `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'collection', 'user', ?)`,
-  ).run(itemId, collectionId, nowIso());
+  tx(db, () => {
+    requireItem(db, itemId);
+    requireCollection(db, collectionId);
+    db.prepare(
+      `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'collection', 'user', ?)`,
+    ).run(itemId, collectionId, nowIso());
+  });
 }
 
 export function removeFromCollection(db: Db, itemId: string, collectionId: string): void {
-  db.prepare(`DELETE FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'collection'`).run(
-    itemId,
-    collectionId,
-  );
+  tx(db, () => {
+    requireItem(db, itemId);
+    requireCollection(db, collectionId);
+    db.prepare(`DELETE FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'collection'`).run(
+      itemId,
+      collectionId,
+    );
+  });
 }
 
 export function addNote(db: Db, itemId: string, body: string): { id: string } {
   const clean = sanitizeText(body, 4000);
-  if (!clean) throw new Error("note body required");
+  if (!clean) throw new RejectedPayload("note body required");
   const id = newId();
-  db.prepare(`INSERT INTO notes (id, item_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`).run(
-    id,
-    itemId,
-    clean,
-    nowIso(),
-    nowIso(),
-  );
+  tx(db, () => {
+    requireItem(db, itemId);
+    db.prepare(`INSERT INTO notes (id, item_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`).run(
+      id,
+      itemId,
+      clean,
+      nowIso(),
+      nowIso(),
+    );
+  });
   return { id };
 }
 

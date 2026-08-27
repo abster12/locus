@@ -149,6 +149,11 @@ export function allowsIframe(xfo: string | null, csp: string | null): boolean | 
   return null;
 }
 
+export function framePermission(status: number, xfo: string | null, csp: string | null): "yes" | "no" {
+  if (status < 200 || status >= 300) return "no";
+  return allowsIframe(xfo, csp) === false ? "no" : "yes";
+}
+
 export async function frameCheck(rawUrl: string): Promise<"yes" | "no" | "unknown"> {
   try {
     let current = rawUrl;
@@ -170,10 +175,7 @@ export async function frameCheck(rawUrl: string): Promise<"yes" | "no" | "unknow
         continue;
       }
       void res.body?.cancel();
-      const allowed = allowsIframe(res.headers.get("x-frame-options"), res.headers.get("content-security-policy"));
-      if (allowed === false) return "no";
-      if (allowed === true) return "yes";
-      return "unknown";
+      return framePermission(res.status, res.headers.get("x-frame-options"), res.headers.get("content-security-policy"));
     }
     return "unknown";
   } catch {

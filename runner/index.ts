@@ -137,7 +137,7 @@ async function run(
       ...next,
     });
   };
-  set({ phase: "opening", message: "Opening a Chrome window…" });
+  set({ phase: "opening", message: "Opening browser…" });
 
   const profileDir = browserProfileDir(args.source, args.accountId);
   mkdirSync(profileDir, { recursive: true });
@@ -154,7 +154,7 @@ async function run(
 
     set({
       phase: "waiting-login",
-      message: `Log in to ${label(args.source)} in the window we opened. Locus never sees your password.`,
+      message: `Log in to ${label(args.source)} to continue.`,
       pageUrl: await ctx.url(),
     });
 
@@ -297,7 +297,7 @@ async function run(
         if (pending.length >= 8) await flush();
         set({
           phase: "capturing",
-          message: `Captured ${totalSeen} records…`,
+          message: `Found ${totalSeen} saves…`,
           seen: totalSeen,
           upserted: totalUpserted,
         });
@@ -322,8 +322,8 @@ async function run(
     set({
       phase: "done",
       message: anyPartial
-        ? `Partial capture — ${totalSeen} records. Refresh to continue.`
-        : `Complete — ${totalSeen} records.`,
+        ? `Found ${totalSeen} saves. Refresh again to continue.`
+        : `Found ${totalSeen} saves.`,
       coverage: anyPartial ? "partial" : "complete",
       seen: totalSeen,
       upserted: totalUpserted,
@@ -369,7 +369,7 @@ async function waitUntilReady(
           phase: waitingChallenge ? "error" : "waiting-login",
           message: waitingChallenge
             ? recoveryText("challenge")
-            : "Log in to the site in the window we opened. Locus never sees your password.",
+            : "Log in to continue.",
           errorCode: waitingChallenge ? "challenge" : undefined,
           previewJpeg: typeof shot === "string" ? shot : shot.toString("base64"),
           pageUrl: await ctx.url(),
@@ -379,7 +379,7 @@ async function waitUntilReady(
           phase: waitingChallenge ? "error" : "waiting-login",
           message: waitingChallenge
             ? recoveryText("challenge")
-            : "Log in to the site in the window we opened. Locus never sees your password.",
+            : "Log in to continue.",
           errorCode: waitingChallenge ? "challenge" : undefined,
           pageUrl: await ctx.url(),
         });

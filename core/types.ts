@@ -131,29 +131,29 @@ export function isCaptureErrorCode(value: string): value is CaptureErrorCode {
 export function recoveryText(code: CaptureErrorCode): string {
   switch (code) {
     case "logged-out":
-      return "Log in to the site in the window we opened. Locus never sees your password.";
+      return "Log in to continue. Locus never sees your password.";
     case "login-timeout":
-      return "Login timed out. Click Connect or Refresh and log in on the real site.";
+      return "Login timed out. Try again.";
     case "session-expired":
-      return "The saved browser session expired. Click Refresh and log in again on the real site.";
+      return "Your login expired. Log in again.";
     case "challenge":
       return "Complete the check in the window, then click Resume.";
     case "wrong-page":
-      return "The capture window is not on the saved-items page. Navigate there, then click Resume.";
+      return "Open the saved-items page, then resume.";
     case "permission-denied":
-      return "This producer is not allowed to write that source. Pair it again from Sources.";
+      return "Reconnect this source.";
     case "site-changed":
-      return "This site’s markup changed. The pack could not find saved items. Capture stopped.";
+      return "This source changed, so the refresh stopped.";
     case "scan-stalled":
-      return "The page stopped loading more items. Existing records were kept. Try Refresh.";
+      return "The refresh stopped early. Try again.";
     case "tab-closed":
-      return "The capture window was closed. Existing records were kept.";
+      return "The refresh stopped because the window closed.";
     case "server-unreachable":
-      return "The capture producer could not reach Locus. Is the desk still running?";
+      return "Locus lost the connection. Try again.";
     case "storage-full":
-      return "The local library could not store more records. Free disk space, then retry.";
+      return "Storage is full. Free some space, then try again.";
     case "interrupted":
-      return "Capture was stopped. Existing records were kept. Click Refresh to continue.";
+      return "Refresh stopped. Try again.";
     default: {
       const _exhaustive: never = code;
       return _exhaustive;

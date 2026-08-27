@@ -27,5 +27,20 @@ export function parseJsonl(text: string): JsonlRecordV1[] {
       throw new RejectedPayload(`line ${i + 1} missing type session|batch|finish`);
     }
   }
+  validateCaptureOrder(records);
   return records;
+}
+
+function validateCaptureOrder(records: JsonlRecordV1[]): void {
+  if (records.length === 0) throw new RejectedPayload("import must contain a session and finish");
+  if (records[0]?.type !== "session") throw new RejectedPayload("import must start with one session record");
+
+  let finished = false;
+  for (const [index, record] of records.entries()) {
+    if (index === 0) continue;
+    if (record.type === "session") throw new RejectedPayload("import may contain only one session record");
+    if (finished) throw new RejectedPayload("finish must be the final import record");
+    if (record.type === "finish") finished = true;
+  }
+  if (!finished) throw new RejectedPayload("import must end with one finish record");
 }

@@ -4,16 +4,31 @@ import { finishSession, ingestBatch, issueToken, lookupToken, startSession } fro
 import { isSourceId } from "../core/types.ts";
 import { RejectedPayload } from "../core/sanitize.ts";
 
+export interface ImportResult {
+  sessions: number;
+  batches: number;
+  changes: number;
+  inserted: number;
+  updated: number;
+  removed: number;
+  replayed: number;
+  errors: string[];
+}
+
 export function importJsonl(
   db: Db,
   text: string,
   opts: { dryRun: boolean },
-): { sessions: number; batches: number; changes: number; errors: string[] } {
+): ImportResult {
   const records = parseJsonl(text);
   const errors: string[] = [];
   let sessions = 0;
   let batches = 0;
   let changes = 0;
+  let inserted = 0;
+  let updated = 0;
+  let removed = 0;
+  let replayed = 0;
   if (opts.dryRun) {
     for (const rec of records) {
       if (rec.type === "session") sessions += 1;
@@ -22,7 +37,7 @@ export function importJsonl(
         changes += rec.changes.length;
       }
     }
-    return { sessions, batches, changes, errors };
+    return { sessions, batches, changes, inserted, updated, removed, replayed, errors };
   }
 
   let current: { sessionId: string } | null = null;
@@ -35,18 +50,25 @@ export function importJsonl(
       tokenValue = issued.token;
       const token = lookupToken(db, issued.token);
       if (!token) throw new RejectedPayload("failed to issue import token");
-      current = startSession(db, token, rec);
+      current = startSession(db, token, rec, { accountKind: "imported" });
       sessions += 1;
     } else if (rec.type === "batch") {
       if (!current) throw new RejectedPayload("batch without session");
-      ingestBatch(db, { ...rec, sessionId: current.sessionId });
+      const token = tokenValue ? lookupToken(db, tokenValue) : null;
+      if (!token) throw new RejectedPayload("failed to issue import token");
+      const result = ingestBatch(db, { ...rec, sessionId: current.sessionId }, { activityKind: "imported", token });
+      if (result.replayed) replayed += 1;
+      inserted += result.inserted;
+      updated += result.updated;
+      removed += result.removed;
       batches += 1;
-      changes += rec.changes.length;
     } else {
       if (!current) throw new RejectedPayload("finish without session");
-      finishSession(db, { ...rec, sessionId: current.sessionId });
+      const token = tokenValue ? lookupToken(db, tokenValue) : null;
+      if (!token) throw new RejectedPayload("failed to issue import token");
+      removed += finishSession(db, { ...rec, sessionId: current.sessionId }, token).removed;
     }
   }
-  void tokenValue;
-  return { sessions, batches, changes, errors };
+  changes = inserted + updated + removed;
+  return { sessions, batches, changes, inserted, updated, removed, replayed, errors };
 }

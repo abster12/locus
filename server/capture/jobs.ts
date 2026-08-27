@@ -10,7 +10,12 @@ export interface CaptureJob {
 }
 
 const jobs: CaptureJob[] = [];
-const waiters: Array<(job: CaptureJob | null) => void> = [];
+type JobAuthorization = { source: string; sourceAccountId: string | null };
+type JobWaiter = {
+  resolve: (job: CaptureJob | null) => void;
+  authorization?: JobAuthorization;
+};
+const waiters: JobWaiter[] = [];
 let lastBeat = 0;
 
 export function resetJobsForTest(): void {
@@ -38,14 +43,17 @@ export function enqueueJob(source: SourceId, accountId: string): CaptureJob {
     status: "queued",
   };
   jobs.push(job);
-  const waiter = waiters.shift();
-  if (waiter) waiter(take(job));
+  const waiterIndex = waiters.findIndex((waiter) => !waiter.authorization || canAccessJob(job, waiter.authorization));
+  if (waiterIndex >= 0) {
+    const waiter = waiters.splice(waiterIndex, 1)[0];
+    waiter?.resolve(take(job));
+  }
   return job;
 }
 
-export function waitJob(ms: number, signal?: AbortSignal): Promise<CaptureJob | null> {
+export function waitJob(ms: number, signal?: AbortSignal, authorization?: JobAuthorization): Promise<CaptureJob | null> {
   heartbeat();
-  const ready = jobs.find((j) => j.status === "queued");
+  const ready = jobs.find((j) => j.status === "queued" && (!authorization || canAccessJob(j, authorization)));
   if (ready) return Promise.resolve(take(ready));
   return new Promise((resolve) => {
     const finish = (job: CaptureJob | null) => {
@@ -55,7 +63,7 @@ export function waitJob(ms: number, signal?: AbortSignal): Promise<CaptureJob | 
       if (i >= 0) waiters.splice(i, 1);
       resolve(job);
     };
-    const waiter = (job: CaptureJob | null) => finish(job);
+    const waiter: JobWaiter = { resolve: (job) => finish(job), authorization };
     const onAbort = () => finish(null);
     const timer = setTimeout(() => finish(null), ms);
     waiters.push(waiter);
@@ -69,6 +77,20 @@ export function waitJob(ms: number, signal?: AbortSignal): Promise<CaptureJob | 
 
 export function getJob(id: string): CaptureJob | undefined {
   return jobs.find((j) => j.id === id);
+}
+
+/**
+ * Wildcard tokens are the narrowly-scoped extension pairing credential: they
+ * may consume jobs for any source, while source/account tokens only consume
+ * their exact source account's jobs. The HTTP layer still limits these tokens
+ * to the Capture Protocol endpoints.
+ */
+export function canAccessJob(job: CaptureJob, authorization: JobAuthorization): boolean {
+  if (authorization.source === "*") return authorization.sourceAccountId === null;
+  return (
+    authorization.source === job.source &&
+    (authorization.sourceAccountId === null || authorization.sourceAccountId === job.accountId)
+  );
 }
 
 export function cancelJobs(source: SourceId, accountId: string): void {

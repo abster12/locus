@@ -1,5 +1,5 @@
 import type { Db } from "../../db/open.ts";
-import { importJsonl } from "../../server/import.ts";
+import { importJsonl, type ImportResult } from "../../server/import.ts";
 
 function parseCsv(text: string): Record<string, string>[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -107,11 +107,12 @@ export function redditExportToJsonl(postsCsv: string, commentsCsv: string): stri
     });
     pos += 1;
   }
+  const sessionKey = crypto.randomUUID().replaceAll("-", "");
   const batch = {
     type: "batch",
     sessionId: "import",
     sequence: 1,
-    idempotencyKey: "reddit-export-1",
+    idempotencyKey: `reddit-export:${sessionKey}:1`,
     changes,
   };
   const finish = { type: "finish", sessionId: "import", coverage: "complete" };
@@ -123,6 +124,6 @@ export function importRedditExport(
   postsCsv: string,
   commentsCsv: string,
   opts: { dryRun: boolean },
-): { sessions: number; batches: number; changes: number; errors: string[] } {
+): ImportResult {
   return importJsonl(db, redditExportToJsonl(postsCsv, commentsCsv), opts);
 }

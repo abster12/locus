@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../db/open.ts";
-import { allowsIframe, isPrivateIp, linkPreview, parsePreview } from "../server/http/preview.ts";
+import { allowsIframe, framePermission, isPrivateIp, linkPreview, parsePreview } from "../server/http/preview.ts";
 
 const OG = `<!doctype html><html><head>
 <title>Fallback &amp; Title</title>
@@ -80,6 +80,13 @@ test("allowsIframe reads X-Frame-Options and CSP frame-ancestors", () => {
     allowsIframe(null, "script-src 'self'; frame-ancestors 'self' cursor.com *.cursor.com cursor.sh *.cursor.sh ; upgrade-insecure-requests"),
     false,
   );
+});
+
+test("framePermission treats successful unrestricted pages as frameable and rejects blocked responses", () => {
+  assert.equal(framePermission(200, null, null), "yes");
+  assert.equal(framePermission(200, "DENY", null), "no");
+  assert.equal(framePermission(200, null, "frame-ancestors 'none'"), "no");
+  assert.equal(framePermission(403, null, null), "no");
 });
 
 test("linkPreview caches an error for private targets and never fetches", async () => {

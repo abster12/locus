@@ -2,8 +2,27 @@ import { createHash } from "node:crypto";
 import type { Db } from "../../db/open.ts";
 import { newId, nowIso, tx } from "../../db/open.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
-import { isSourceId, type SourceId } from "../../core/types.ts";
+import type { SourceId } from "../../core/types.ts";
 import type { CaptureBatchV1, CaptureFinishV1, CaptureSessionV1 } from "../../packages/protocol/types.ts";
+
+export interface CaptureToken {
+  id: string;
+  source: string;
+  sourceAccountId: string | null;
+  revokedAt: string | null;
+}
+
+export type SourceAccountKind = "live" | "imported";
+
+export class CaptureAuthorizationError extends Error {
+  constructor(
+    readonly statusCode: 403 | 404,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CaptureAuthorizationError";
+  }
+}
 
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -55,7 +74,7 @@ export function knownCompleteIds(db: Db, source: string, accountId: string | nul
 export function lookupToken(
   db: Db,
   token: string,
-): { id: string; source: string; sourceAccountId: string | null; revokedAt: string | null } | null {
+): CaptureToken | null {
   const row = db.prepare(`SELECT id, source, source_account_id as sourceAccountId, revoked_at as revokedAt FROM capture_tokens WHERE token_hash = ?`).get(
     hashToken(token),
   ) as { id: string; source: string; sourceAccountId: string | null; revokedAt: string | null } | undefined;
@@ -88,12 +107,15 @@ function ensureAccount(
   source: string,
   externalId: string,
   boundAccountId: string | null,
+  accountKind: SourceAccountKind,
 ): string {
   if (boundAccountId) {
-    const existing = db.prepare(`SELECT id, external_id FROM source_accounts WHERE id = ?`).get(boundAccountId) as
-      | { id: string; external_id: string }
+    const existing = db.prepare(`SELECT id, source, external_id, account_kind FROM source_accounts WHERE id = ?`).get(boundAccountId) as
+      | { id: string; source: string; external_id: string; account_kind: SourceAccountKind }
       | undefined;
-    if (!existing) throw new RejectedPayload("token is bound to a missing account");
+    if (!existing) throw new CaptureAuthorizationError(403, "token is bound to a missing account");
+    if (existing.source !== source) throw new CaptureAuthorizationError(403, "token is not valid for this source account");
+    if (existing.account_kind !== accountKind) throw new CaptureAuthorizationError(403, "token is not valid for this source account kind");
     if (isPlaceholderAccount(existing.external_id)) {
       if (!isPlaceholderAccount(externalId)) {
         db.prepare(`UPDATE source_accounts SET external_id = ?, display_name = COALESCE(display_name, ?) WHERE id = ?`).run(
@@ -107,17 +129,18 @@ function ensureAccount(
     // Token already names the account. Ignore producer-supplied ids like "extension".
     return existing.id;
   }
-  const found = db.prepare(`SELECT id FROM source_accounts WHERE source = ? AND external_id = ?`).get(source, externalId) as
+  const found = db.prepare(`SELECT id FROM source_accounts WHERE source = ? AND external_id = ? AND account_kind = ?`).get(source, externalId, accountKind) as
     | { id: string }
     | undefined;
   if (found) return found.id;
   const id = newId();
-  db.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+  db.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at, account_kind) VALUES (?, ?, ?, ?, ?, ?)`).run(
     id,
     source,
     externalId,
     externalId,
     nowIso(),
+    accountKind,
   );
   return id;
 }
@@ -145,16 +168,18 @@ function ensureCollection(
 
 export function startSession(
   db: Db,
-  token: { id: string; source: string; sourceAccountId: string | null },
+  token: Pick<CaptureToken, "id" | "source" | "sourceAccountId">,
   session: CaptureSessionV1,
+  opts?: { accountKind?: SourceAccountKind },
 ): { sessionId: string; captureRunId: string } {
   const sessionSource = session.source.startsWith("custom:") ? session.source : session.source;
   if (token.source !== "*" && token.source !== sessionSource) {
-    throw new RejectedPayload("token is not valid for this source");
+    throw new CaptureAuthorizationError(403, "token is not valid for this source");
   }
   const source = token.source === "*" ? sessionSource : token.source;
   return tx(db, () => {
-    const accountId = ensureAccount(db, source, session.accountExternalId, token.sourceAccountId);
+    const accountKind = opts?.accountKind ?? "live";
+    const accountId = ensureAccount(db, source, session.accountExternalId, token.sourceAccountId, accountKind);
     const collectionId = ensureCollection(
       db,
       accountId,
@@ -316,8 +341,8 @@ function upsertItem(
 export function ingestBatch(
   db: Db,
   batch: CaptureBatchV1,
-  opts?: { activityKind?: "detected" | "captured" | "imported" },
-): { replayed: boolean; upserted: number; removed: number } {
+  opts?: { activityKind?: "detected" | "captured" | "imported"; token?: Pick<CaptureToken, "id" | "source" | "sourceAccountId"> },
+): { replayed: boolean; inserted: number; updated: number; upserted: number; removed: number } {
   return tx(db, () => {
     const session = db
       .prepare(
@@ -326,29 +351,33 @@ export function ingestBatch(
       .get(batch.sessionId) as
       | {
           id: string;
+          token_id: string;
+          source: string;
           source_account_id: string;
           source_collection_id: string;
           capture_run_id: string;
           last_sequence: number;
           finished_at: string | null;
           observed_at: string;
-        }
+      }
       | undefined;
-    if (!session) throw new RejectedPayload("unknown session");
+    if (!session) throw new CaptureAuthorizationError(404, "unknown session");
+    if (opts?.token) assertSessionAccess(session, opts.token);
     if (session.finished_at) throw new RejectedPayload("session already finished");
 
     const prior = db
-      .prepare(`SELECT sequence FROM capture_batches WHERE idempotency_key = ?`)
-      .get(batch.idempotencyKey) as { sequence: number } | undefined;
+      .prepare(`SELECT sequence FROM capture_batches WHERE session_id = ? AND idempotency_key = ?`)
+      .get(batch.sessionId, batch.idempotencyKey) as { sequence: number } | undefined;
     if (prior) {
-      return { replayed: true, upserted: 0, removed: 0 };
+      return { replayed: true, inserted: 0, updated: 0, upserted: 0, removed: 0 };
     }
 
     if (batch.sequence !== session.last_sequence + 1) {
       throw new RejectedPayload(`unexpected sequence ${batch.sequence}, expected ${session.last_sequence + 1}`);
     }
 
-    let upserted = 0;
+    let inserted = 0;
+    let updated = 0;
     let removed = 0;
     for (const change of batch.changes) {
       if (change.kind === "upsert") {
@@ -360,7 +389,8 @@ export function ingestBatch(
           change,
           activityKind: opts?.activityKind ?? "captured",
         });
-        if (result === "inserted") upserted += 1;
+        if (result === "inserted") inserted += 1;
+        else updated += 1;
         db.prepare(`INSERT OR IGNORE INTO capture_seen (capture_run_id, external_id) VALUES (?, ?)`).run(
           session.capture_run_id,
           change.externalId,
@@ -386,12 +416,12 @@ export function ingestBatch(
     ).run(
       batch.sequence,
       batch.changes.length,
-      upserted,
+      inserted + updated,
       removed,
       JSON.stringify({ sequence: batch.sequence, idempotencyKey: batch.idempotencyKey }),
       session.capture_run_id,
     );
-    return { replayed: false, upserted, removed };
+    return { replayed: false, inserted, updated, upserted: inserted + updated, removed };
   });
 }
 
@@ -405,10 +435,11 @@ function applyRemove(
     .prepare(`SELECT id, item_id FROM source_records WHERE source_account_id = ? AND external_id = ?`)
     .get(session.source_account_id, externalId) as { id: string; item_id: string | null } | undefined;
   if (!record) return 0;
-  db.prepare(`DELETE FROM source_memberships WHERE source_collection_id = ? AND source_record_id = ?`).run(
+  const deletion = db.prepare(`DELETE FROM source_memberships WHERE source_collection_id = ? AND source_record_id = ?`).run(
     session.source_collection_id,
     record.id,
   );
+  if (Number(deletion.changes) === 0) return 0;
   if (record.item_id) {
     db.prepare(
       `INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, 'source_removed', ?, 'source', ?)`,
@@ -417,18 +448,25 @@ function applyRemove(
   return 1;
 }
 
-export function finishSession(db: Db, finish: CaptureFinishV1): { removed: number } {
+export function finishSession(
+  db: Db,
+  finish: CaptureFinishV1,
+  token?: Pick<CaptureToken, "id" | "source" | "sourceAccountId">,
+): { removed: number } {
   return tx(db, () => {
     const session = db.prepare(`SELECT * FROM capture_sessions WHERE id = ?`).get(finish.sessionId) as
       | {
           id: string;
+          token_id: string;
+          source: string;
           source_account_id: string;
           source_collection_id: string;
           capture_run_id: string;
           finished_at: string | null;
-        }
+      }
       | undefined;
-    if (!session) throw new RejectedPayload("unknown session");
+    if (!session) throw new CaptureAuthorizationError(404, "unknown session");
+    if (token) assertSessionAccess(session, token);
     if (session.finished_at) return { removed: 0 };
 
     let removed = 0;
@@ -496,4 +534,17 @@ export function cancelRun(db: Db, captureRunId: string): void {
   db.prepare(
     `UPDATE capture_runs SET finished_at = ?, status = 'cancelled', coverage = 'partial', error_code = 'interrupted', error_detail = 'stopped by user' WHERE id = ? AND finished_at IS NULL`,
   ).run(nowIso(), captureRunId);
+}
+
+function assertSessionAccess(
+  session: { token_id: string; source: string; source_account_id: string },
+  token: Pick<CaptureToken, "id" | "source" | "sourceAccountId">,
+): void {
+  if (session.token_id !== token.id) throw new CaptureAuthorizationError(403, "token cannot access this session");
+  if (token.source !== "*" && token.source !== session.source) {
+    throw new CaptureAuthorizationError(403, "token is not valid for this session source");
+  }
+  if (token.sourceAccountId !== null && token.sourceAccountId !== session.source_account_id) {
+    throw new CaptureAuthorizationError(403, "token is not valid for this session account");
+  }
 }

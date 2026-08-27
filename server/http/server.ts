@@ -10,16 +10,18 @@ import {
   addToCollection,
   createCollection,
   getSetting,
+  MissingResource,
   removeFromCollection,
   removeTag,
   setSetting,
   setStatus,
 } from "../../core/commands.ts";
-import { buildSummary, exportLibrary, getItem, listCollections, listItems, listTags, wipeLibrary } from "../../core/library.ts";
+import { buildSummary, exportLibrary, getItem, itemCounts, listCollections, listItems, listItemsPage, listTags, wipeLibrary } from "../../core/library.ts";
 import { isItemStatus, isSourceId, recoveryText, type SourceId } from "../../core/types.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import { parseBatch, parseFinish, parseSession } from "../../packages/protocol/validate.ts";
 import {
+  CaptureAuthorizationError,
   cancelRun,
   failRun,
   finishSession,
@@ -34,9 +36,10 @@ import { importJsonl } from "../import.ts";
 import { scheduleXEnrich } from "../enrich.ts";
 import { importRedditExport } from "../../importers/reddit-export/index.ts";
 import { cancelRunner, deleteProfile, getProgress, isRunning, markDone, markRunning, setProgress, startRunner } from "../../runner/index.ts";
-import { cancelJobs, enqueueJob, extensionAlive, finishJob, getJob, heartbeat, waitJob } from "../capture/jobs.ts";
+import { canAccessJob, cancelJobs, enqueueJob, extensionAlive, finishJob, getJob, heartbeat, waitJob } from "../capture/jobs.ts";
 import { frameCheck, linkPreview } from "./preview.ts";
 import { filterCitations, type SummarySnapshotV1 } from "../../core/summaries.ts";
+import { classifySourceAccount } from "../source-state.ts";
 import {
   allowedHost,
   allowedOrigin,
@@ -49,6 +52,11 @@ import {
 
 const PORT = Number(process.env.LOCUS_PORT || 8787);
 const ROOT = join(import.meta.dirname, "../..");
+
+// Keep ordinary API/capture requests bounded while allowing a documented,
+// larger envelope for the two user-driven import endpoints.
+export const MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024;
+export const MAX_IMPORT_BODY_BYTES = 25 * 1024 * 1024;
 
 type RouteFn = (
   req: IncomingMessage,
@@ -87,7 +95,20 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const source = url.searchParams.get("source") ?? undefined;
     const q = url.searchParams.get("q") ?? undefined;
     const collectionId = url.searchParams.get("collectionId") ?? undefined;
-    json(res, 200, { items: listItems(db, { view, source, q, collectionId }) });
+    const shelf = url.searchParams.get("shelf") ?? undefined;
+    const cursor = url.searchParams.get("cursor") ?? undefined;
+    const requested = Number(url.searchParams.get("limit") ?? 50);
+    const page = listItemsPage(db, { view, source, q, collectionId, shelf }, { cursor, limit: Number.isFinite(requested) ? requested : 50 });
+    json(res, 200, { items: page.items, nextCursor: page.nextCursor, counts: page.counts });
+  });
+
+  on("GET", "/api/items/counts", async (_req, res, url) => {
+    const view = url.searchParams.get("view") === "inbox" ? "inbox" : "recent";
+    const source = url.searchParams.get("source") ?? undefined;
+    const q = url.searchParams.get("q") ?? undefined;
+    const collectionId = url.searchParams.get("collectionId") ?? undefined;
+    const shelf = url.searchParams.get("shelf") ?? undefined;
+    json(res, 200, { counts: itemCounts(db, { view, source, q, collectionId, shelf }) });
   });
 
   on("GET", "/api/items/:id", async (_req, res, _url, _body, params) => {
@@ -248,6 +269,8 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const source = params.source ?? "";
     if (!isSourceId(source)) return json(res, 400, { error: "unknown source" });
     const accountId = String(asRec(body).accountId ?? "");
+    const account = lookupSourceAccount(db, source, accountId);
+    if (!account || account.accountKind === "imported") return json(res, 404, { error: "unknown source account" });
     cancelRunner(source, accountId);
     cancelJobs(source, accountId);
     const run = latestRun(db, source, accountId);
@@ -260,6 +283,8 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!isSourceId(source)) return json(res, 400, { error: "unknown source" });
     const accountId = String(asRec(body).accountId ?? "");
     if (!accountId) return json(res, 400, { error: "accountId required" });
+    const account = lookupSourceAccount(db, source, accountId);
+    if (!account || account.accountKind === "imported") return json(res, 404, { error: "unknown source account" });
     cancelRunner(source, accountId);
     revokeTokensForAccount(db, accountId);
     deleteProfile(source, accountId);
@@ -278,6 +303,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const source = params.source ?? "";
     if (!isSourceId(source)) return json(res, 400, { error: "unknown source" });
     const accountId = url.searchParams.get("accountId") ?? undefined;
+    if (accountId && !lookupSourceAccount(db, source, accountId)) return json(res, 404, { error: "unknown source account" });
     json(res, 200, { health: sourceHealth(db, source, accountId) });
   });
 
@@ -317,7 +343,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
     const ac = new AbortController();
     req.on("close", () => ac.abort());
-    const job = await waitJob(25_000, ac.signal);
+    const job = await waitJob(25_000, ac.signal, row);
     if (!job) {
       res.writeHead(204).end();
       return;
@@ -332,6 +358,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
     const job = getJob(params.id ?? "");
     if (!job) return json(res, 404, { error: "unknown job" });
+    if (!canAccessJob(job, row)) return json(res, 403, { error: "token cannot access this job" });
     json(res, 200, job);
   });
 
@@ -342,6 +369,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
     const job = getJob(params.id ?? "");
     if (!job) return json(res, 404, { error: "unknown job" });
+    if (!canAccessJob(job, row)) return json(res, 403, { error: "token cannot access this job" });
     const rec = asRec(body);
     const phase = String(rec.phase ?? "capturing") as "opening" | "waiting-login" | "capturing" | "done" | "error";
     setProgress(job.source, job.accountId, {
@@ -358,8 +386,10 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!token) return json(res, 401, { error: "missing token" });
     const row = lookupToken(db, token);
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
-    const job = finishJob(params.id ?? "");
+    const job = getJob(params.id ?? "");
     if (!job) return json(res, 404, { error: "unknown job" });
+    if (!canAccessJob(job, row)) return json(res, 403, { error: "token cannot access this job" });
+    finishJob(job.id);
     const rec = asRec(body);
     setProgress(job.source, job.accountId, {
       phase: rec.error ? "error" : "done",
@@ -399,7 +429,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const row = lookupToken(db, token);
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
     const batch = parseBatch(body);
-    const result = ingestBatch(db, batch);
+    const result = ingestBatch(db, batch, { token: row });
     const urls = batch.changes.flatMap((c) => (c.kind === "upsert" && c.item.url ? [c.item.url] : []));
     if (urls.length) scheduleXEnrich(db, urls);
     json(res, 200, result);
@@ -411,7 +441,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const row = lookupToken(db, token);
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
     const finish = parseFinish(body);
-    json(res, 200, finishSession(db, finish));
+    json(res, 200, finishSession(db, finish, row));
   });
 
   const server = createServer(async (req, res) => {
@@ -430,6 +460,12 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       const isCapture = url.pathname.startsWith("/capture/");
       const isApi = url.pathname.startsWith("/api/");
       const mutating = req.method !== "GET" && req.method !== "HEAD";
+      const bodyLimit = url.pathname.startsWith("/api/import/") ? MAX_IMPORT_BODY_BYTES : MAX_REQUEST_BODY_BYTES;
+      if (mutating && (isApi || isCapture) && declaredContentLength(req) > bodyLimit) {
+        req.resume();
+        json(res, 413, { error: "request body too large" });
+        return;
+      }
       if (mutating && (isApi || isCapture)) console.info(`${req.method} ${url.pathname}`);
 
       if (isApi || isCapture) {
@@ -465,7 +501,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         res.setHeader("set-cookie", cookieHeader(install));
       }
 
-      const body = mutating ? await readJson(req) : null;
+      const body = mutating ? await readJson(req, bodyLimit) : null;
       const key = `${req.method} ${url.pathname}`;
       const exact = routes.get(key);
       if (exact) {
@@ -486,6 +522,18 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
 
       await serveApp(req, res, url);
     } catch (error) {
+      if (error instanceof RequestTooLarge) {
+        json(res, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof MissingResource) {
+        json(res, 404, { error: error.message });
+        return;
+      }
+      if (error instanceof CaptureAuthorizationError) {
+        json(res, error.statusCode, { error: error.message });
+        return;
+      }
       if (error instanceof RejectedPayload) {
         json(res, 400, { error: error.message });
         return;
@@ -551,12 +599,37 @@ function bearer(req: IncomingMessage): string | null {
   return h.slice("Bearer ".length).trim();
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+class RequestTooLarge extends Error {
+  constructor(limit: number) {
+    super(`request body too large (limit ${Math.round(limit / 1024 / 1024)}MB)`);
+    this.name = "RequestTooLarge";
+  }
+}
+
+function declaredContentLength(req: IncomingMessage): number {
+  const raw = req.headers["content-length"];
+  if (typeof raw !== "string") return 0;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let bytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string | Uint8Array);
+    bytes += buffer.byteLength;
+    if (bytes > limit) continue;
+    chunks.push(buffer);
+  }
+  if (bytes > limit) throw new RequestTooLarge(limit);
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return null;
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new RejectedPayload("invalid JSON");
+  }
 }
 
 async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body: unknown): Promise<void> {
@@ -578,12 +651,12 @@ async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body
     enqueueJob(sourceRaw, account.id);
     setProgress(sourceRaw, account.id, {
       phase: "waiting-login",
-      message: `Opening ${sourceLabel(sourceRaw)} in this Chrome. Log in if the site asks. Locus never sees your password.`,
+      message: `Opening ${sourceLabel(sourceRaw)}…`,
     });
     json(res, 200, {
       account,
       via: "extension",
-      copy: `Log in to ${sourceLabel(sourceRaw)} in the tab we opened. Locus never sees your password.`,
+      copy: `Log in to ${sourceLabel(sourceRaw)} to continue.`,
     });
     return;
   }
@@ -592,7 +665,7 @@ async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body
   json(res, 200, {
     account,
     via: "runner",
-    copy: `Log in to ${sourceLabel(sourceRaw)} in the window we opened. Locus never sees your password.`,
+    copy: `Log in to ${sourceLabel(sourceRaw)} to continue.`,
   });
 }
 
@@ -615,14 +688,13 @@ function sourceLabel(source: SourceId): string {
 
 function ensurePendingAccount(db: Db, source: SourceId, accountId?: string): { id: string; source: string; external_id: string } {
   if (accountId) {
-    const row = db.prepare(`SELECT id, source, external_id FROM source_accounts WHERE id = ?`).get(accountId) as
-      | { id: string; source: string; external_id: string }
-      | undefined;
-    if (row) return row;
+    const row = lookupSourceAccount(db, source, accountId);
+    if (!row || row.accountKind === "imported") throw new MissingResource("unknown source account");
+    return row;
   }
   const rows = db
-    .prepare(`SELECT id, source, external_id FROM source_accounts WHERE source = ? ORDER BY created_at DESC`)
-    .all(source) as { id: string; source: string; external_id: string }[];
+    .prepare(`SELECT id, source, external_id, account_kind FROM source_accounts WHERE source = ? AND account_kind <> 'imported' ORDER BY created_at DESC`)
+    .all(source) as { id: string; source: string; external_id: string; account_kind: "live" }[];
   const reusable = rows.find((row) => {
     const ext = String(row.external_id);
     if (ext.startsWith("fixture:")) return false;
@@ -632,7 +704,7 @@ function ensurePendingAccount(db: Db, source: SourceId, accountId?: string): { i
   if (reusable) return reusable;
   const id = newId();
   const external = `pending:${id}`;
-  db.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+  db.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at, account_kind) VALUES (?, ?, ?, ?, ?, 'live')`).run(
     id,
     source,
     external,
@@ -647,11 +719,21 @@ function latestRun(db: Db, source: SourceId, accountId: string): { id: string } 
     .prepare(
       `SELECT r.id FROM capture_runs r
        JOIN source_collections c ON c.id = r.source_collection_id
-       WHERE c.source_account_id = ? ORDER BY r.started_at DESC LIMIT 1`,
+       JOIN source_accounts a ON a.id = c.source_account_id
+       WHERE c.source_account_id = ? AND a.source = ? ORDER BY r.started_at DESC LIMIT 1`,
     )
-    .get(accountId) as { id: string } | undefined;
-  void source;
+    .get(accountId, source) as { id: string } | undefined;
   return row ?? null;
+}
+
+export function lookupSourceAccount(
+  db: Db,
+  source: SourceId,
+  accountId: string,
+): { id: string; source: string; external_id: string; accountKind: "live" | "imported" } | undefined {
+  return db
+    .prepare(`SELECT id, source, external_id, account_kind as accountKind FROM source_accounts WHERE id = ? AND source = ?`)
+    .get(accountId, source) as { id: string; source: string; external_id: string; accountKind: "live" | "imported" } | undefined;
 }
 
 function sourceOverview(db: Db) {
@@ -661,19 +743,19 @@ function sourceOverview(db: Db) {
     label: sourceLabel(source),
     accounts: (
       db
-        .prepare(`SELECT id, external_id as externalId, display_name as displayName FROM source_accounts WHERE source = ?`)
-        .all(source) as { id: string; externalId: string; displayName: string | null }[]
+        .prepare(`SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind FROM source_accounts WHERE source = ?`)
+        .all(source) as { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" }[]
     ).map((account) => sourceHealth(db, source, account.id)),
   }));
 }
 
 function sourceHealth(db: Db, source: SourceId, accountId?: string) {
   const account = accountId
-    ? (db.prepare(`SELECT id, external_id as externalId, display_name as displayName FROM source_accounts WHERE id = ?`).get(accountId) as
-        | { id: string; externalId: string; displayName: string | null }
+    ? (db.prepare(`SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind FROM source_accounts WHERE id = ? AND source = ?`).get(accountId, source) as
+        | { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" }
         | undefined)
-    : (db.prepare(`SELECT id, external_id as externalId, display_name as displayName FROM source_accounts WHERE source = ? ORDER BY created_at DESC LIMIT 1`).get(source) as
-        | { id: string; externalId: string; displayName: string | null }
+    : (db.prepare(`SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind FROM source_accounts WHERE source = ? ORDER BY created_at DESC LIMIT 1`).get(source) as
+        | { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" }
         | undefined);
   const run = account
     ? (db
@@ -698,10 +780,20 @@ function sourceHealth(db: Db, source: SourceId, accountId?: string) {
         | undefined)
     : undefined;
   const live = account ? getProgress(source, account.id) : undefined;
+  const running = account ? isRunning(source, account.id) : false;
+  const state = account
+    ? classifySourceAccount({
+        accountKind: account.accountKind,
+        externalId: account.externalId,
+        captureRunning: running,
+        extensionConnected: extensionAlive(),
+        runnerProfileExists: existsSync(browserProfileDir(source, account.id)),
+      })
+    : null;
   return {
     source,
-    account,
-    running: account ? isRunning(source, account.id) : false,
+    account: account ? { ...account, state } : null,
+    running,
     progress: live ?? null,
     lastRun: run
       ? {
@@ -723,10 +815,10 @@ function sourceHealth(db: Db, source: SourceId, accountId?: string) {
 }
 
 function coverageLabel(coverage: string | null, status: string): string {
-  if (status === "running") return "Capture in progress — coverage not decided yet.";
-  if (coverage === "complete") return "Complete capture — Locus walked the collection to the end it could see.";
-  if (coverage === "partial") return "Partial capture — existing records were kept. Missing items were not treated as removed.";
-  return "No finished capture yet.";
+  if (status === "running") return "Refresh in progress.";
+  if (coverage === "complete") return "Last refresh complete.";
+  if (coverage === "partial") return "Last refresh was partial.";
+  return "Not refreshed yet.";
 }
 
 function recoveryTextSafe(code: string): string | null {
@@ -739,7 +831,7 @@ function recoveryTextSafe(code: string): string | null {
 
 function refreshOnOpen(db: Db): void {
   const accounts = db
-    .prepare(`SELECT id, source FROM source_accounts WHERE external_id NOT LIKE 'fixture:%' AND external_id NOT LIKE 'pending:%'`)
+    .prepare(`SELECT id, source FROM source_accounts WHERE account_kind <> 'imported' AND external_id NOT LIKE 'pending:%'`)
     .all() as { id: string; source: string }[];
   for (const account of accounts) {
     if (!isSourceId(account.source)) continue;
@@ -749,7 +841,7 @@ function refreshOnOpen(db: Db): void {
       enqueueJob(account.source, account.id);
       setProgress(account.source, account.id, {
         phase: "waiting-login",
-        message: `Opening ${sourceLabel(account.source)} in this Chrome.`,
+        message: `Opening ${sourceLabel(account.source)}…`,
       });
       continue;
     }

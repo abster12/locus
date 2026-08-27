@@ -23,5 +23,5 @@ test("recovery copy exists for the required capture errors", () => {
   }
   assert.match(recoveryText("challenge"), /complete the check/i);
   assert.match(recoveryText("logged-out"), /never sees your password/i);
-  assert.match(recoveryText("site-changed"), /markup changed/i);
+  assert.match(recoveryText("site-changed"), /source changed/i);
 });

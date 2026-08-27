@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA_SQL } from "./schema.ts";
+import { migrateSchema, SCHEMA_SQL } from "./schema.ts";
 
 export type Db = DatabaseSync;
 
@@ -22,6 +22,7 @@ export function openDb(path = join(locusHome(), "locus.db")): Db {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  migrateSchema(db);
   return db;
 }
 

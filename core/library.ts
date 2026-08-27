@@ -1,7 +1,10 @@
 import type { Db } from "../db/open.ts";
+import { localDay } from "./dates.ts";
+export { localDay } from "./dates.ts";
 import { dateLabel, type DateLabel, type ItemStatus, type SourceId } from "./types.ts";
 import { inferHandleFromUrl } from "./sanitize.ts";
 import { excerptOf, type CitedItemV1, type DeterministicBlockV1, type SummarySnapshotV1 } from "./summaries.ts";
+import { SHELVES, tagsForShelf, type ShelfKey } from "./categories.ts";
 
 export interface ItemCard {
   id: string;
@@ -42,6 +45,43 @@ type ItemRow = {
   snoozed_until: string | null;
   source: string | null;
 };
+
+export interface ItemListFilter {
+  view?: "recent" | "inbox";
+  source?: string;
+  q?: string;
+  collectionId?: string;
+  shelf?: string;
+}
+
+export interface ItemListCounts {
+  total: number;
+  inbox: number;
+  shelves: Record<string, number>;
+}
+
+export interface ItemPage {
+  items: ItemCard[];
+  nextCursor: string | null;
+  counts: ItemListCounts;
+}
+
+type Cursor = { publishedAt: string; firstObservedAt: string; id: string };
+
+function encodeCursor(cursor: Cursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeCursor(raw: string | undefined): Cursor | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<Cursor>;
+    if (typeof value.publishedAt !== "string" || typeof value.firstObservedAt !== "string" || typeof value.id !== "string") return null;
+    return { publishedAt: value.publishedAt, firstObservedAt: value.firstObservedAt, id: value.id };
+  } catch {
+    return null;
+  }
+}
 
 function parseMedia(raw: string): { kind: string; url: string }[] {
   try {
@@ -111,14 +151,45 @@ const ITEM_SELECT = `
   LEFT JOIN item_state s ON s.item_id = i.id
 `;
 
-export function listItems(
-  db: Db,
-  filter: { view?: "recent" | "inbox"; source?: string; q?: string; collectionId?: string },
-): ItemCard[] {
+type ShelfPredicate = { sql: string; params: string[] };
+
+function isShelfKey(value: string): value is ShelfKey {
+  return SHELVES.some((shelf) => shelf.key === value);
+}
+
+/** Build the SQL predicate for one shelf, shared by list filters and counts. */
+function shelfCondition(key: ShelfKey): ShelfPredicate {
+  const known = [...new Set(SHELVES.flatMap((s) => tagsForShelf(s.key)))];
+  if (key === "else") {
+    const marks = known.map(() => "?").join(", ");
+    return {
+      sql: `EXISTS (
+        SELECT 1 FROM memberships mx JOIN tags tx ON tx.id = mx.target_id
+        WHERE mx.item_id = i.id AND mx.target_kind = 'tag' AND lower(tx.name) NOT IN (${marks})
+      )`,
+      params: known,
+    };
+  }
+  const tags = tagsForShelf(key);
+  const marks = tags.map(() => "?").join(", ");
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM memberships ms JOIN tags ts ON ts.id = ms.target_id
+      WHERE ms.item_id = i.id AND ms.target_kind = 'tag' AND lower(ts.name) IN (${marks})
+    )`,
+    params: tags,
+  };
+}
+
+function matchingWhere(filter: ItemListFilter, includeShelf = true): { where: string[]; params: string[] } {
   const where: string[] = [];
   const params: string[] = [];
   if (filter.view === "inbox") {
     where.push(`COALESCE(s.status, 'inbox') = 'inbox'`);
+  } else if (filter.view === "recent") {
+    // The normal Desk is a useful working surface, not an archive. Accepted
+    // saves remain visible; archived and rejected saves leave it.
+    where.push(`COALESCE(s.status, 'inbox') NOT IN ('archived', 'rejected')`);
   }
   if (filter.source) {
     where.push(`EXISTS (
@@ -142,8 +213,74 @@ export function listItems(
     )`);
     params.push(like, like, like, like, like, like);
   }
-  const sql = `${ITEM_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY i.published_at DESC, i.first_observed_at DESC`;
-  const rows = db.prepare(sql).all(...params) as ItemRow[];
+  if (includeShelf && filter.shelf && isShelfKey(filter.shelf)) {
+    const condition = shelfCondition(filter.shelf);
+    where.push(condition.sql);
+    params.push(...condition.params);
+  }
+  return { where, params };
+}
+
+function countMatchingItems(db: Db, filter: ItemListFilter, extra?: string, extraParams: string[] = []): number {
+  const matched = matchingWhere(filter, false);
+  const where = extra ? [...matched.where, extra] : matched.where;
+  const row = db
+    .prepare(`SELECT COUNT(DISTINCT i.id) AS count FROM items i LEFT JOIN item_state s ON s.item_id = i.id ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`)
+    .get(...matched.params, ...extraParams) as { count: number };
+  return Number(row?.count ?? 0);
+}
+
+export function itemCounts(db: Db, filter: ItemListFilter = {}): ItemListCounts {
+  const selectedShelf = filter.shelf && isShelfKey(filter.shelf) ? shelfCondition(filter.shelf) : null;
+  const shelves = Object.fromEntries(
+    SHELVES.map((shelf) => {
+      const condition = shelfCondition(shelf.key);
+      return [shelf.key, countMatchingItems(db, filter, condition.sql, condition.params)];
+    }),
+  );
+  return {
+    total: selectedShelf ? countMatchingItems(db, filter, selectedShelf.sql, selectedShelf.params) : countMatchingItems(db, filter),
+    inbox: selectedShelf
+      ? countMatchingItems(db, { ...filter, view: "inbox" }, selectedShelf.sql, selectedShelf.params)
+      : countMatchingItems(db, { ...filter, view: "inbox" }),
+    shelves,
+  };
+}
+
+export function listItemsPage(db: Db, filter: ItemListFilter = {}, options: { cursor?: string; limit?: number } = {}): ItemPage {
+  const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 50)));
+  const matched = matchingWhere(filter);
+  const cursor = decodeCursor(options.cursor);
+  if (cursor) {
+    matched.where.push(`(
+      COALESCE(i.published_at, '') < ?
+      OR (COALESCE(i.published_at, '') = ? AND i.first_observed_at < ?)
+      OR (COALESCE(i.published_at, '') = ? AND i.first_observed_at = ? AND i.id < ?)
+    )`);
+    matched.params.push(cursor.publishedAt, cursor.publishedAt, cursor.firstObservedAt, cursor.publishedAt, cursor.firstObservedAt, cursor.id);
+  }
+  const rows = db
+    .prepare(`${ITEM_SELECT} ${matched.where.length ? `WHERE ${matched.where.join(" AND ")}` : ""}
+      ORDER BY COALESCE(i.published_at, '') DESC, i.first_observed_at DESC, i.id DESC LIMIT ?`)
+    .all(...matched.params, limit + 1) as ItemRow[];
+  const pageRows = rows.slice(0, limit);
+  const last = pageRows[pageRows.length - 1];
+  return {
+    items: pageRows.map((row) => hydrate(db, row)),
+    nextCursor: rows.length > limit && last
+      ? encodeCursor({ publishedAt: last.published_at ?? "", firstObservedAt: last.first_observed_at, id: last.id })
+      : null,
+    counts: itemCounts(db, filter),
+  };
+}
+
+/** Return every matching item for exports, summaries, and existing callers. */
+export function listItems(db: Db, filter: ItemListFilter = {}): ItemCard[] {
+  const matched = matchingWhere(filter);
+  const rows = db
+    .prepare(`${ITEM_SELECT} ${matched.where.length ? `WHERE ${matched.where.join(" AND ")}` : ""}
+      ORDER BY COALESCE(i.published_at, '') DESC, i.first_observed_at DESC, i.id DESC`)
+    .all(...matched.params) as ItemRow[];
   return rows.map((row) => hydrate(db, row));
 }
 
@@ -198,7 +335,7 @@ export function buildSummary(
   let items: ItemCard[] = [];
   if (scope === "day") {
     const day = scopeRef;
-    items = listItems(db, {}).filter((item) => item.firstObservedAt.slice(0, 10) === day);
+    items = listItems(db, {}).filter((item) => localDay(new Date(item.firstObservedAt)) === day);
   } else if (scope === "collection") {
     items = listItems(db, { collectionId: scopeRef });
   } else if (scope === "item") {
@@ -236,17 +373,17 @@ export function buildSummary(
   const blocks: DeterministicBlockV1[] = [
     {
       kind: "captures-by-source",
-      title: "New captures by source",
+      title: "Saved by source",
       rows: [...bySource.entries()].map(([source, itemIds]) => ({ source, count: itemIds.length, itemIds })),
     },
     {
       kind: "new-creators",
-      title: "Newly discovered creators",
+      title: "Creators",
       rows: [...byCreator.entries()].map(([name, itemIds]) => ({ name, count: itemIds.length, itemIds })),
     },
     {
       kind: "common-tags",
-      title: "Most common tags",
+      title: "Popular tags",
       rows: [...byTag.entries()]
         .sort((a, b) => b[1].length - a[1].length)
         .slice(0, 8)
@@ -254,16 +391,16 @@ export function buildSummary(
     },
     {
       kind: "collection-adds",
-      title: "Items added to collections",
+      title: "Collections",
       rows: [...byCollection.entries()].map(([collection, itemIds]) => ({
         collection,
         count: itemIds.length,
         itemIds,
       })),
     },
-    { kind: "inbox", title: "Unresolved inbox", count: inboxIds.length, itemIds: inboxIds.slice(0, 40) },
-    { kind: "excerpts", title: "Selected excerpts", rows: excerpts },
-    { kind: "citations", title: "Cited items", itemIds: items.map((item) => item.id) },
+    { kind: "inbox", title: "Inbox", count: inboxIds.length, itemIds: inboxIds.slice(0, 40) },
+    { kind: "excerpts", title: "Highlights", rows: excerpts },
+    { kind: "citations", title: "Links", itemIds: items.map((item) => item.id) },
   ];
 
   return {
