@@ -43,6 +43,8 @@ function parseHash(): Route {
   if (a === "collections" && b) return { name: "collection", id: b };
   if (a === "collections") return { name: "collections" };
   if (a === "sources") return { name: "sources" };
+  // Reading is an index only. Ignore any stale/native-reader document segment
+  // so `#/reading/:id` renders the ordinary index and shell chrome.
   if (a === "reading") return { name: "reading" };
   if (a === "atlas") return { name: "atlas" };
   if (a === "shelves") return { name: "shelves" };
@@ -206,7 +208,6 @@ export function App() {
   }, []);
 
   const deskActive = route.name === "recent" || route.name === "inbox";
-
   if (error) {
     return (
       <div className="shell">
@@ -328,7 +329,7 @@ export function App() {
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
       {route.name === "sources" && <SourcesPage />}
-      {route.name === "reading" && <ReadingPage onOpen={openStage} />}
+      {route.name === "reading" && <ReadingPage />}
       {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {route.name === "shelves" && <ShelvesPage />}
       {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}

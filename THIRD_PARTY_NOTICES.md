@@ -6,6 +6,8 @@ Required runtime and build dependencies. All have OSI-approved licenses.
 | --- | --- |
 | react | MIT |
 | react-dom | MIT |
+| parse5 | MIT |
+| entities | BSD-2-Clause |
 | puppeteer-core | Apache-2.0 |
 | vite | MIT |
 | @vitejs/plugin-react | MIT |

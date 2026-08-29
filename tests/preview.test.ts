@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../db/open.ts";
 import { allowsIframe, framePermission, isPrivateIp, linkPreview, parsePreview } from "../server/http/preview.ts";
+import { LOCAL_LIBRARY_ID, listReadingDocuments } from "../server/reading/module.ts";
 
 const OG = `<!doctype html><html><head>
 <title>Fallback &amp; Title</title>
@@ -55,6 +56,45 @@ test("keepLink accepts article and quote urls, drops self and t.co", async () =>
   assert.equal(needsEnrich({ url: self, body: "hi", published_at: null }), true);
   assert.equal(needsEnrich({ url: self, body: "hi\nhttps://lucumr.pocoo.org/p", published_at: "2026-01-01T00:00:00.000Z" }), false);
   assert.equal(applyLinks("hello", ["https://a.com"]), "hello\nhttps://a.com");
+});
+
+test("X enrichment commits the Item body and Reading reconciliation together", async () => {
+  const { enrichXItems } = await import("../server/enrich.ts");
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "locus-enrich-")), "t.db"));
+  const permalink = "https://x.com/author/status/123";
+  const now = "2026-08-27T00:00:00.000Z";
+  db.prepare(
+    `INSERT INTO items (id, content_type, title, body, url, first_observed_at, media, created_at, updated_at)
+     VALUES ('item-enrich', 'post', 'Saved', 'captured', ?, ?, '[]', ?, ?)`,
+  ).run(permalink, now, now, now);
+  // Transaction-failure fixture: a SQLite trigger is intentionally installed
+  // at the Reading table seam to verify Item writes roll back atomically.
+  db.exec(
+    `CREATE TRIGGER fail_reading_document
+       BEFORE INSERT ON reading_documents
+       BEGIN SELECT RAISE(ABORT, 'reading insert failed'); END`,
+  );
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ tweet: { created_timestamp: 1_724_736_000, card: { url: "https://example.com/article" } } }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  try {
+    assert.equal(await enrichXItems(db, [permalink]), 0);
+    assert.equal((db.prepare(`SELECT body, published_at FROM items WHERE id = 'item-enrich'`).get() as { body: string; published_at: string | null }).body, "captured");
+    assert.equal(listReadingDocuments(db, LOCAL_LIBRARY_ID, { view: "queue" }).preparing.count, 0);
+
+    db.exec("DROP TRIGGER fail_reading_document");
+    assert.equal(await enrichXItems(db, [permalink]), 1);
+    const item = db.prepare(`SELECT body, published_at FROM items WHERE id = 'item-enrich'`).get() as { body: string; published_at: string | null };
+    assert.match(item.body, /https:\/\/example\.com\/article/);
+    assert.ok(item.published_at);
+    assert.equal(listReadingDocuments(db, LOCAL_LIBRARY_ID, { view: "queue" }).preparing.count, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    db.close();
+  }
 });
 
 test("parseYtDate reads itemprop and json keys", async () => {

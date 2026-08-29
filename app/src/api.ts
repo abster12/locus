@@ -34,6 +34,81 @@ export interface ItemPage {
   counts: ItemCounts;
 }
 
+export interface ReadingSummary {
+  id: string;
+  canonicalUrl: string;
+  title: string;
+  subtitle: string | null;
+  byline: string | null;
+  publication: string | null;
+  host: string;
+  kind: string;
+  availability: string;
+  failureCode: string | null;
+  originalStatus: string;
+  excerpt: string | null;
+  wordCount: number | null;
+  readingMinutes: number | null;
+  lastSavedAt: string;
+  sources: string[];
+  savedCount: number;
+  heroAssetId: string | null;
+  progress: { state: string; progress: number } | null;
+}
+
+export interface ReadingPage {
+  view: string;
+  preparing: { count: number; preview: ReadingSummary[] };
+  unread: { items: ReadingSummary[]; nextCursor: string | null };
+  items: ReadingSummary[];
+  nextCursor: string | null;
+  counts: { unread: number; reading: number; preparing: number; finished: number };
+}
+
+export interface ReadingDocumentDetail {
+  id: string;
+  canonicalUrl: string;
+  observedUrl: string;
+  finalUrl: string | null;
+  kind: string;
+  availability: string;
+  failureCode: string | null;
+  originalStatus: string;
+  originalCheckedAt: string | null;
+  title: string;
+  subtitle: string | null;
+  byline: string | null;
+  publication: string | null;
+  publishedAt: string | null;
+  language: string | null;
+  excerpt: string | null;
+  wordCount: number | null;
+  readingMinutes: number | null;
+  contentBlocks: { version: number; blocks: unknown[] } | null;
+  toc: { id: string; level: number; text: string }[];
+  heroAssetId: string | null;
+  lastSavedAt: string;
+  fetchedAt: string | null;
+  updatedAt: string;
+  progress: { state: string; progress: number; anchor: string | null } | null;
+  provenance: {
+    itemId: string;
+    observedUrl: string;
+    title: string | null;
+    body: string | null;
+    source: string;
+    authorName: string | null;
+    authorHandle: string | null;
+    permalink: string;
+    firstObservedAt: string;
+    sourceSavedAt: string | null;
+    capturedAt: string | null;
+    tags: { id: string; name: string }[];
+    notes: { id: string; body: string }[];
+  }[];
+  actions: { openOriginal: boolean; retry: boolean; remove: boolean };
+}
+
 export interface ImportResult {
   sessions: number;
   batches: number;
@@ -78,11 +153,21 @@ export interface LinkPreview {
 
 let csrf = "";
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+function apiHeaders(init?: RequestInit): Headers {
   const headers = new Headers(init?.headers);
   if (init?.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   if (csrf && init?.method && init.method !== "GET") headers.set("x-csrf-token", csrf);
-  const res = await fetch(path, { ...init, headers, credentials: "same-origin" });
+  return headers;
+}
+
+function errorFrom(res: Response, data: unknown): Error {
+  const message =
+    data && typeof data === "object" && "error" in data ? String((data as { error?: unknown }).error) : res.statusText;
+  return new Error(message || "Request failed");
+}
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, { ...init, headers: apiHeaders(init), credentials: "same-origin" });
   const text = await res.text();
   let data: unknown = null;
   if (text) {
@@ -92,8 +177,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
       throw new Error(res.ok ? "Invalid server response" : res.statusText || "Request failed");
     }
   }
-  const message = data && typeof data === "object" && "error" in data ? String((data as { error?: unknown }).error) : res.statusText;
-  if (!res.ok) throw new Error(message);
+  if (!res.ok) throw errorFrom(res, data);
   return data as T;
 }
 
@@ -121,6 +205,20 @@ export const api = {
     req<{ item: ItemCard }>(`/api/items/${id}/collections/remove`, { method: "POST", body: JSON.stringify({ collectionId }) }),
   collections: () => req<{ collections: Collection[]; tags: { id: string; name: string }[] }>("/api/collections"),
   linkPreview: (url: string) => req<{ preview: LinkPreview }>(`/api/link-preview?url=${encodeURIComponent(url)}`),
+  reading: (q = "", signal?: AbortSignal) => req<ReadingPage>(`/api/reading${q ? `?${q}` : ""}`, { signal }),
+  readingDocument: (id: string, signal?: AbortSignal) =>
+    req<{ document: ReadingDocumentDetail }>(`/api/reading/${encodeURIComponent(id)}`, { signal }),
+  retryReading: (id: string) =>
+    req<{ document: ReadingDocumentDetail }>(`/api/reading/${encodeURIComponent(id)}/retry`, { method: "POST", body: "{}" }),
+  readingProgress: (id: string, body: { op: "advance" | "unread" | "finished"; progress?: number; anchor?: { blockId: string; offset?: number } }) =>
+    req<{ progress: { state: string; progress: number; anchor: string | null } | null }>(`/api/reading/${encodeURIComponent(id)}/progress`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  removeReading: (id: string) =>
+    req<{ undoToken: string; undoExpiresAt: string }>(`/api/reading/${encodeURIComponent(id)}/remove`, { method: "POST", body: "{}" }),
+  undoRemoveReading: (token: string) =>
+    req<{ document: ReadingSummary }>(`/api/reading/undo-remove`, { method: "POST", body: JSON.stringify({ token }) }),
   frameCheck: (url: string) => req<{ framed: "yes" | "no" | "unknown" }>(`/api/frame-check?url=${encodeURIComponent(url)}`),
   autoTag: () => req<{ tagged: number; applied: number }>("/api/items/auto-tag", { method: "POST", body: "{}" }),
   createCollection: (name: string) =>
@@ -153,7 +251,40 @@ export const api = {
     req<{ token: string; origin: string }>(`/api/sources/${source}/pair-extension`, { method: "POST", body: "{}" }),
   settings: (refreshOnOpen: boolean) =>
     req("/api/settings", { method: "POST", body: JSON.stringify({ refreshOnOpen }) }),
-  exportLibrary: () => req<unknown>("/api/export"),
+  exportLibrary: async () => {
+    const res = await fetch("/api/export", { credentials: "same-origin", headers: apiHeaders() });
+    if (!res.ok) {
+      let data: unknown = null;
+      try {
+        data = JSON.parse(await res.text());
+      } catch {
+        /* use status text */
+      }
+      throw errorFrom(res, data);
+    }
+    const disp = res.headers.get("content-disposition") ?? "";
+    const match = /filename="([^"]+)"/.exec(disp);
+    return { blob: await res.blob(), filename: match?.[1] || "locus-library.locus.ndjson" };
+  },
+  importLibrary: async (body: Blob) => {
+    const res = await fetch("/api/library/import", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: apiHeaders({ method: "POST", headers: { "content-type": "application/x-ndjson" } }),
+      body,
+    });
+    const text = await res.text();
+    let data: unknown = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(res.ok ? "Invalid server response" : res.statusText || "Request failed");
+      }
+    }
+    if (!res.ok) throw errorFrom(res, data);
+    return data as { ok: true; records: number };
+  },
   deleteLibrary: () => req("/api/library/delete", { method: "POST", body: JSON.stringify({ confirm: "DELETE" }) }),
   importJsonl: (text: string, dryRun: boolean) =>
     req<ImportResult>("/api/import/jsonl", { method: "POST", body: JSON.stringify({ text, dryRun }) }),

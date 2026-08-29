@@ -1,7 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
+import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
 import type { Db } from "../../db/open.ts";
 import { browserProfileDir, newId, nowIso } from "../../db/open.ts";
 import {
@@ -16,7 +19,7 @@ import {
   setSetting,
   setStatus,
 } from "../../core/commands.ts";
-import { buildSummary, exportLibrary, getItem, itemCounts, listCollections, listItems, listItemsPage, listTags, wipeLibrary } from "../../core/library.ts";
+import { buildSummary, getItem, itemCounts, listCollections, listItems, listItemsPage, listTags, wipeLibrary } from "../../core/library.ts";
 import { isItemStatus, isSourceId, recoveryText, type SourceId } from "../../core/types.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import { parseBatch, parseFinish, parseSession } from "../../packages/protocol/validate.ts";
@@ -40,6 +43,29 @@ import { canAccessJob, cancelJobs, enqueueJob, extensionAlive, finishJob, getJob
 import { frameCheck, linkPreview } from "./preview.ts";
 import { filterCitations, type SummarySnapshotV1 } from "../../core/summaries.ts";
 import { classifySourceAccount } from "../source-state.ts";
+import {
+  LOCAL_LIBRARY_ID,
+  backfillReading,
+  getReadingDocument,
+  listReadingDocuments,
+  openReadingAsset,
+  removeReadingDocument,
+  retryReadingDocument,
+  startReadingWorker,
+  stopReadingWorker,
+  undoRemoveReadingDocument,
+  updateReadingProgress,
+  wakeReadingWorker,
+  type ReadingSort,
+  type ReadingView,
+} from "../reading/module.ts";
+import {
+  ArchiveTooLarge,
+  importLibraryArchive,
+  LibraryConflict,
+  MAX_LIBRARY_ARCHIVE_BYTES,
+  writeLibraryArchive,
+} from "../library-archive.ts";
 import {
   allowedHost,
   allowedOrigin,
@@ -69,6 +95,9 @@ type RouteFn = (
 export function listen(db: Db): { port: number; close: () => Promise<void> } {
   const install = loadInstall();
   if (!getSetting(db, "refreshOnOpen")) setSetting(db, "refreshOnOpen", "0");
+  // Existing libraries get local candidate rows on boot; this never fetches the web.
+  backfillReading(db, LOCAL_LIBRARY_ID);
+  if (process.env.LOCUS_READING_WORKER !== "0") startReadingWorker(db);
 
   const routes = new Map<string, RouteFn>();
   const matchers: { method: string; re: RegExp; keys: string[]; fn: RouteFn }[] = [];
@@ -191,6 +220,38 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     json(res, 200, { preview: await linkPreview(db, url.searchParams.get("url") ?? "") });
   });
 
+  // Library id is always "local" on localhost. Clients cannot choose it.
+  on("GET", "/api/reading", async (_req, res, url) => {
+    json(res, 200, listReadingDocuments(db, LOCAL_LIBRARY_ID, parseReadingQuery(url)));
+  });
+
+  on("GET", "/api/reading/:documentId", async (_req, res, _url, _body, params) => {
+    json(res, 200, { document: getReadingDocument(db, LOCAL_LIBRARY_ID, params.documentId ?? "") });
+  });
+
+  on("GET", "/api/reading/:documentId/assets/:assetId", async (_req, res, _url, _body, params) => {
+    const file = openReadingAsset(db, LOCAL_LIBRARY_ID, params.documentId ?? "", params.assetId ?? "");
+    if (!file) return json(res, 404, { error: "not found" });
+    res.writeHead(200, { "content-type": file.mime, "cache-control": "private, max-age=31536000" });
+    createReadStream(file.path).pipe(res);
+  });
+
+  on("POST", "/api/reading/:documentId/retry", async (_req, res, _url, _body, params) => {
+    json(res, 200, { document: await retryReadingDocument(db, LOCAL_LIBRARY_ID, params.documentId ?? "") });
+  });
+
+  on("POST", "/api/reading/:documentId/progress", async (_req, res, _url, body, params) => {
+    json(res, 200, { progress: updateReadingProgress(db, LOCAL_LIBRARY_ID, params.documentId ?? "", asRec(body)) });
+  });
+
+  on("POST", "/api/reading/:documentId/remove", async (_req, res, _url, _body, params) => {
+    json(res, 200, removeReadingDocument(db, LOCAL_LIBRARY_ID, params.documentId ?? ""));
+  });
+
+  on("POST", "/api/reading/undo-remove", async (_req, res, _url, body) => {
+    json(res, 200, { document: undoRemoveReadingDocument(db, LOCAL_LIBRARY_ID, String(asRec(body).token ?? "")) });
+  });
+
   on("GET", "/api/frame-check", async (_req, res, url) => {
     json(res, 200, { framed: await frameCheck(url.searchParams.get("url") ?? "") });
   });
@@ -228,7 +289,36 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   });
 
   on("GET", "/api/export", async (_req, res) => {
-    json(res, 200, exportLibrary(db));
+    const tmp = join(tmpdir(), `locus-export-${newId()}.ndjson`);
+    try {
+      const bytes = writeLibraryArchive(db, tmp);
+      res.writeHead(200, {
+        "content-type": "application/x-ndjson; charset=utf-8",
+        "content-disposition": 'attachment; filename="locus-library.locus.ndjson"',
+        "content-length": String(bytes),
+        "cache-control": "no-store",
+      });
+      const stream = createReadStream(tmp);
+      const done = () => rmSync(tmp, { force: true });
+      stream.on("close", done);
+      stream.on("error", done);
+      stream.pipe(res);
+    } catch (error) {
+      rmSync(tmp, { force: true });
+      throw error;
+    }
+  });
+
+  on("POST", "/api/library/import", async (req, res) => {
+    const tmp = join(tmpdir(), `locus-import-${newId()}.ndjson`);
+    try {
+      await streamRequestToFile(req, tmp, MAX_LIBRARY_ARCHIVE_BYTES);
+      const result = await importLibraryArchive(db, tmp);
+      wakeReadingWorker(db);
+      json(res, 200, result);
+    } finally {
+      rmSync(tmp, { force: true });
+    }
   });
 
   on("POST", "/api/library/delete", async (_req, res, _url, body) => {
@@ -460,7 +550,12 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       const isCapture = url.pathname.startsWith("/capture/");
       const isApi = url.pathname.startsWith("/api/");
       const mutating = req.method !== "GET" && req.method !== "HEAD";
-      const bodyLimit = url.pathname.startsWith("/api/import/") ? MAX_IMPORT_BODY_BYTES : MAX_REQUEST_BODY_BYTES;
+      const archiveImport = url.pathname === "/api/library/import" && req.method === "POST";
+      const bodyLimit = archiveImport
+        ? MAX_LIBRARY_ARCHIVE_BYTES
+        : url.pathname.startsWith("/api/import/")
+          ? MAX_IMPORT_BODY_BYTES
+          : MAX_REQUEST_BODY_BYTES;
       if (mutating && (isApi || isCapture) && declaredContentLength(req) > bodyLimit) {
         req.resume();
         json(res, 413, { error: "request body too large" });
@@ -501,7 +596,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         res.setHeader("set-cookie", cookieHeader(install));
       }
 
-      const body = mutating ? await readJson(req, bodyLimit) : null;
+      const body = mutating && !archiveImport ? await readJson(req, bodyLimit) : null;
       const key = `${req.method} ${url.pathname}`;
       const exact = routes.get(key);
       if (exact) {
@@ -522,8 +617,12 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
 
       await serveApp(req, res, url);
     } catch (error) {
-      if (error instanceof RequestTooLarge) {
+      if (error instanceof RequestTooLarge || error instanceof ArchiveTooLarge) {
         json(res, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof LibraryConflict) {
+        json(res, 409, { error: error.message });
         return;
       }
       if (error instanceof MissingResource) {
@@ -559,6 +658,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   return {
     port: PORT,
     close: async () => {
+      stopReadingWorker(db);
       await new Promise<void>((resolve) => server.close(() => resolve()));
       vite?.kill();
     },
@@ -593,6 +693,35 @@ function asRec(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
+function parseReadingQuery(url: URL): {
+  view?: ReadingView;
+  kind?: string;
+  source?: string;
+  q?: string;
+  sort?: ReadingSort;
+  cursor?: string;
+  limit?: number;
+} {
+  const viewRaw = url.searchParams.get("view");
+  const sortRaw = url.searchParams.get("sort");
+  const view = viewRaw === "finished" || viewRaw === "queue" ? viewRaw : undefined;
+  const sort =
+    sortRaw === "recent" || sortRaw === "oldest" || sortRaw === "shortest" || sortRaw === "longest" || sortRaw === "publication"
+      ? sortRaw
+      : undefined;
+  const limitRaw = url.searchParams.get("limit");
+  const limit = limitRaw ? Number(limitRaw) : undefined;
+  return {
+    view,
+    kind: url.searchParams.get("kind") ?? undefined,
+    source: url.searchParams.get("source") ?? undefined,
+    q: url.searchParams.get("q") ?? undefined,
+    sort,
+    cursor: url.searchParams.get("cursor") ?? undefined,
+    limit: Number.isFinite(limit) ? limit : undefined,
+  };
+}
+
 function bearer(req: IncomingMessage): string | null {
   const h = req.headers.authorization;
   if (!h?.startsWith("Bearer ")) return null;
@@ -611,6 +740,18 @@ function declaredContentLength(req: IncomingMessage): number {
   if (typeof raw !== "string") return 0;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+async function streamRequestToFile(req: IncomingMessage, path: string, limit: number): Promise<void> {
+  let bytes = 0;
+  const limitStream = new Transform({
+    transform(chunk, _enc, cb) {
+      bytes += chunk.length;
+      if (bytes > limit) cb(new ArchiveTooLarge());
+      else cb(null, chunk);
+    },
+  });
+  await pipeline(req, limitStream, createWriteStream(path));
 }
 
 async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {

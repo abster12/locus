@@ -1,6 +1,6 @@
 import type { Db } from "./open.ts";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 8;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -207,6 +207,86 @@ CREATE INDEX IF NOT EXISTS idx_activities_item ON activities(item_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_item ON memberships(item_id);
 CREATE INDEX IF NOT EXISTS idx_notes_item ON notes(item_id);
 CREATE INDEX IF NOT EXISTS idx_runs_collection ON capture_runs(source_collection_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS reading_documents (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  canonical_url TEXT NOT NULL,
+  observed_url TEXT NOT NULL,
+  final_url TEXT,
+  kind TEXT NOT NULL,
+  availability TEXT NOT NULL,
+  failure_code TEXT,
+  original_status TEXT NOT NULL DEFAULT 'unknown',
+  original_checked_at TEXT,
+  title TEXT,
+  subtitle TEXT,
+  byline TEXT,
+  publication TEXT,
+  published_at TEXT,
+  language TEXT,
+  excerpt TEXT,
+  search_text TEXT,
+  word_count INTEGER,
+  reading_minutes INTEGER,
+  content_blocks TEXT,
+  content_hash TEXT,
+  hero_asset_id TEXT,
+  last_saved_at TEXT NOT NULL,
+  removed_at TEXT,
+  undo_token TEXT,
+  undo_expires_at TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  fetched_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(library_id, id),
+  UNIQUE(library_id, canonical_url)
+);
+
+CREATE TABLE IF NOT EXISTS reading_provenance (
+  library_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  observed_url TEXT NOT NULL,
+  discovered_at TEXT NOT NULL,
+  PRIMARY KEY (library_id, document_id, item_id),
+  FOREIGN KEY (library_id, document_id) REFERENCES reading_documents(library_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reading_progress (
+  library_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  state TEXT NOT NULL,
+  progress REAL NOT NULL,
+  anchor TEXT,
+  first_opened_at TEXT,
+  last_opened_at TEXT,
+  finished_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (library_id, document_id),
+  FOREIGN KEY (library_id, document_id) REFERENCES reading_documents(library_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reading_assets (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  adapter_key TEXT NOT NULL,
+  FOREIGN KEY (library_id, document_id) REFERENCES reading_documents(library_id, id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_reading_documents_queue ON reading_documents(library_id, removed_at, availability, last_saved_at, id);
+CREATE INDEX IF NOT EXISTS idx_reading_documents_work ON reading_documents(next_attempt_at, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_reading_provenance_item ON reading_provenance(item_id);
+CREATE INDEX IF NOT EXISTS idx_reading_provenance_document ON reading_provenance(document_id);
 `;
 
 type ForeignKey = { table: string; from: string; to: string; on_delete: string };
@@ -244,6 +324,8 @@ export function migrateSchema(db: Db): void {
     }
     migrateCaptureBatches(db);
     migrateSourceAccounts(db);
+    migrateReadingOwnership(db);
+    if (current < 8) migrateReadingRescan(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -415,4 +497,145 @@ function rebuildMemberships(db: Db): void {
     DROP TABLE memberships_legacy;
     CREATE INDEX IF NOT EXISTS idx_memberships_item ON memberships(item_id);
   `);
+}
+
+function tableExists(db: Db, name: string): boolean {
+  const row = db.prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
+function hasCompositeDocumentFk(db: Db, table: string): boolean {
+  const keys = db.prepare(`PRAGMA foreign_key_list(${table})`).all() as ForeignKey[];
+  const toDoc = keys.filter((key) => key.table === "reading_documents");
+  const from = new Set(toDoc.map((key) => key.from));
+  return from.has("library_id") && from.has("document_id");
+}
+
+function migrateReadingOwnership(db: Db): void {
+  if (!tableExists(db, "reading_documents")) return;
+  if (hasCompositeDocumentFk(db, "reading_provenance") && hasCompositeDocumentFk(db, "reading_progress") && hasCompositeDocumentFk(db, "reading_assets")) {
+    return;
+  }
+  db.exec(`
+    DELETE FROM reading_provenance WHERE NOT EXISTS (
+      SELECT 1 FROM reading_documents d WHERE d.id = reading_provenance.document_id AND d.library_id = reading_provenance.library_id
+    );
+    DELETE FROM reading_progress WHERE NOT EXISTS (
+      SELECT 1 FROM reading_documents d WHERE d.id = reading_progress.document_id AND d.library_id = reading_progress.library_id
+    );
+    DELETE FROM reading_assets WHERE NOT EXISTS (
+      SELECT 1 FROM reading_documents d WHERE d.id = reading_assets.document_id AND d.library_id = reading_assets.library_id
+    );
+  `);
+  db.exec(`
+    ALTER TABLE reading_documents RENAME TO reading_documents_legacy;
+    CREATE TABLE reading_documents (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL,
+      canonical_url TEXT NOT NULL,
+      observed_url TEXT NOT NULL,
+      final_url TEXT,
+      kind TEXT NOT NULL,
+      availability TEXT NOT NULL,
+      failure_code TEXT,
+      original_status TEXT NOT NULL DEFAULT 'unknown',
+      original_checked_at TEXT,
+      title TEXT,
+      subtitle TEXT,
+      byline TEXT,
+      publication TEXT,
+      published_at TEXT,
+      language TEXT,
+      excerpt TEXT,
+      search_text TEXT,
+      word_count INTEGER,
+      reading_minutes INTEGER,
+      content_blocks TEXT,
+      content_hash TEXT,
+      hero_asset_id TEXT,
+      last_saved_at TEXT NOT NULL,
+      removed_at TEXT,
+      undo_token TEXT,
+      undo_expires_at TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      fetched_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(library_id, id),
+      UNIQUE(library_id, canonical_url)
+    );
+    INSERT INTO reading_documents SELECT * FROM reading_documents_legacy;
+    DROP TABLE reading_documents_legacy;
+    DROP INDEX IF EXISTS idx_reading_documents_queue;
+    DROP INDEX IF EXISTS idx_reading_documents_work;
+    CREATE INDEX IF NOT EXISTS idx_reading_documents_queue ON reading_documents(library_id, removed_at, availability, last_saved_at, id);
+    CREATE INDEX IF NOT EXISTS idx_reading_documents_work ON reading_documents(next_attempt_at, lease_expires_at);
+  `);
+  db.exec(`
+    ALTER TABLE reading_provenance RENAME TO reading_provenance_legacy;
+    CREATE TABLE reading_provenance (
+      library_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      observed_url TEXT NOT NULL,
+      discovered_at TEXT NOT NULL,
+      PRIMARY KEY (library_id, document_id, item_id),
+      FOREIGN KEY (library_id, document_id) REFERENCES reading_documents(library_id, id) ON DELETE CASCADE,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    INSERT INTO reading_provenance SELECT * FROM reading_provenance_legacy;
+    DROP TABLE reading_provenance_legacy;
+    CREATE INDEX IF NOT EXISTS idx_reading_provenance_item ON reading_provenance(item_id);
+    CREATE INDEX IF NOT EXISTS idx_reading_provenance_document ON reading_provenance(document_id);
+  `);
+  db.exec(`
+    ALTER TABLE reading_progress RENAME TO reading_progress_legacy;
+    CREATE TABLE reading_progress (
+      library_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      progress REAL NOT NULL,
+      anchor TEXT,
+      first_opened_at TEXT,
+      last_opened_at TEXT,
+      finished_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (library_id, document_id),
+      FOREIGN KEY (library_id, document_id) REFERENCES reading_documents(library_id, id) ON DELETE CASCADE
+    );
+    INSERT INTO reading_progress SELECT * FROM reading_progress_legacy;
+    DROP TABLE reading_progress_legacy;
+  `);
+  db.exec(`
+    ALTER TABLE reading_assets RENAME TO reading_assets_legacy;
+    CREATE TABLE reading_assets (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      byte_size INTEGER NOT NULL,
+      adapter_key TEXT NOT NULL,
+      FOREIGN KEY (library_id, document_id) REFERENCES reading_documents(library_id, id) ON DELETE CASCADE
+    );
+    INSERT INTO reading_assets SELECT * FROM reading_assets_legacy;
+    DROP TABLE reading_assets_legacy;
+  `);
+}
+
+/** Re-discover candidates and re-qualify nav-heavy articles after the v7 rollout. */
+function migrateReadingRescan(db: Db): void {
+  if (!tableExists(db, "reading_documents") || !tableExists(db, "settings")) return;
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES ('reading.backfill.cursor', '')
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run();
+  db.prepare(
+    `UPDATE reading_documents
+        SET availability = 'pending', next_attempt_at = ?, lease_owner = NULL, lease_expires_at = NULL
+      WHERE removed_at IS NULL AND availability = 'unsupported' AND failure_code = 'not_article_like'`,
+  ).run(new Date().toISOString());
 }

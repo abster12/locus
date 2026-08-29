@@ -1,5 +1,6 @@
 import type { Db } from "../db/open.ts";
-import { nowIso } from "../db/open.ts";
+import { nowIso, tx } from "../db/open.ts";
+import { LOCAL_LIBRARY_ID, reconcileItem } from "./reading/module.ts";
 
 const URL_RE = /https?:\/\/[^\s]+/g;
 const FX = "https://api.fxtwitter.com/status/";
@@ -76,12 +77,16 @@ export async function enrichXItems(db: Db, urls?: string[]): Promise<number> {
       const got = await fetchTweet(id, row.url);
       if (!got) continue;
       const body = applyLinks(row.body, got.links);
-      db.prepare(`UPDATE items SET body = ?, published_at = COALESCE(?, published_at), updated_at = ? WHERE id = ?`).run(
-        body,
-        got.publishedAt,
-        nowIso(),
-        row.id,
-      );
+      tx(db, () => {
+        db.prepare(`UPDATE items SET body = ?, published_at = COALESCE(?, published_at), updated_at = ? WHERE id = ?`).run(
+          body,
+          got.publishedAt,
+          nowIso(),
+          row.id,
+        );
+        // Keep Reading discovery in the same commit as the enriched Item body.
+        reconcileItem(db, LOCAL_LIBRARY_ID, row.id);
+      });
       filled += 1;
     } catch {
       // fxtwitter down — leave the save as captured

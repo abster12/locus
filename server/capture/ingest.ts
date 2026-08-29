@@ -4,6 +4,7 @@ import { newId, nowIso, tx } from "../../db/open.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import type { SourceId } from "../../core/types.ts";
 import type { CaptureBatchV1, CaptureFinishV1, CaptureSessionV1 } from "../../packages/protocol/types.ts";
+import { LOCAL_LIBRARY_ID, reconcileItem, wakeReadingWorker } from "../reading/module.ts";
 
 export interface CaptureToken {
   id: string;
@@ -245,7 +246,7 @@ function upsertItem(
     ).run(
       draft.contentType,
       draft.title ?? null,
-      mergeKeptUrls(draft.body ?? null, prev?.body ?? null),
+      preferCompleteBody(draft.body ?? null, prev?.body ?? null),
       draft.url,
       draft.authorName ?? null,
       draft.authorHandle ?? null,
@@ -275,6 +276,8 @@ function upsertItem(
       args.observedAt,
       args.captureRunId,
     );
+    // Same SQLite transaction as the Item write: a crash cannot keep the post without Reading rows.
+    reconcileItem(db, LOCAL_LIBRARY_ID, existing.item_id);
     return "updated";
   }
 
@@ -335,6 +338,8 @@ function upsertItem(
   db.prepare(
     `INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, ?, ?, 'locus', ?)`,
   ).run(newId(), itemId, args.activityKind, args.observedAt, args.captureRunId);
+  // Same SQLite transaction as the Item write: a crash cannot keep the post without Reading rows.
+  reconcileItem(db, LOCAL_LIBRARY_ID, itemId);
   return "inserted";
 }
 
@@ -453,7 +458,7 @@ export function finishSession(
   finish: CaptureFinishV1,
   token?: Pick<CaptureToken, "id" | "source" | "sourceAccountId">,
 ): { removed: number } {
-  return tx(db, () => {
+  const result = tx(db, () => {
     const session = db.prepare(`SELECT * FROM capture_sessions WHERE id = ?`).get(finish.sessionId) as
       | {
           id: string;
@@ -510,6 +515,8 @@ export function finishSession(
     );
     return { removed };
   });
+  wakeReadingWorker(db);
+  return result;
 }
 
 export function failRun(db: Db, captureRunId: string, code: string, detail: string): void {
@@ -518,16 +525,10 @@ export function failRun(db: Db, captureRunId: string, code: string, detail: stri
   ).run(nowIso(), code, detail, captureRunId);
 }
 
-function mergeKeptUrls(incoming: string | null, previous: string | null): string | null {
-  const next = incoming?.trim() || "";
-  const prev = previous?.trim() || "";
-  if (!next) return prev || null;
-  if (!prev) return next;
-  let out = next;
-  for (const u of prev.match(/https?:\/\/[^\s]+/g) ?? []) {
-    if (!out.includes(u)) out += `\n${u}`;
-  }
-  return out;
+function preferCompleteBody(incoming: string | null, previous: string | null): string | null {
+  if (!isThinBody(incoming)) return incoming?.trim() || null;
+  if (!isThinBody(previous)) return previous?.trim() || null;
+  return incoming?.trim() || previous?.trim() || null;
 }
 
 export function cancelRun(db: Db, captureRunId: string): void {

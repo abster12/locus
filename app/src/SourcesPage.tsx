@@ -9,7 +9,7 @@ export function SourcesPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
-  const [deskAction, setDeskAction] = useState<"export" | "delete" | null>(null);
+  const [deskAction, setDeskAction] = useState<"export" | "restore" | "delete" | null>(null);
 
   async function reload() {
     try {
@@ -119,11 +119,11 @@ export function SourcesPage() {
               setPageError(null);
               try {
                 const lib = await api.exportLibrary();
-                const blob = new Blob([JSON.stringify(lib, null, 2)], { type: "application/json" });
                 const a = document.createElement("a");
-                a.href = URL.createObjectURL(blob);
-                a.download = "locus-library.json";
+                a.href = URL.createObjectURL(lib.blob);
+                a.download = lib.filename;
                 a.click();
+                URL.revokeObjectURL(a.href);
                 setMsg("Library exported.");
               } catch (e) {
                 setPageError(e instanceof Error ? e.message : String(e));
@@ -132,7 +132,35 @@ export function SourcesPage() {
               }
             }}
           >
-            {deskAction === "export" ? "Exporting…" : "Export JSON"}
+            {deskAction === "export" ? "Exporting…" : "Export library"}
+          </button>
+          <button
+            className="btn"
+            disabled={Boolean(deskAction)}
+            onClick={() => {
+              if (!confirm("Restore requires an empty library. Delete Library first if this desk already has saves.")) return;
+              const input = document.createElement("input");
+              input.type = "file";
+              input.accept = ".ndjson,.locus.ndjson,application/x-ndjson,text/plain";
+              input.onchange = () => {
+                const file = input.files?.[0];
+                if (!file) return;
+                setDeskAction("restore");
+                setPageError(null);
+                api
+                  .importLibrary(file)
+                  .then(() => {
+                    notifyLibraryChanged();
+                    return reload();
+                  })
+                  .then(() => setMsg("Library restored."))
+                  .catch((e: unknown) => setPageError(e instanceof Error ? e.message : String(e)))
+                  .finally(() => setDeskAction(null));
+              };
+              input.click();
+            }}
+          >
+            {deskAction === "restore" ? "Restoring…" : "Restore archive file"}
           </button>
           <button
             className="btn danger"

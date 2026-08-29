@@ -1,6 +1,7 @@
 import { lookup } from "node:dns/promises";
 import type { Db } from "../../db/open.ts";
 import { nowIso } from "../../db/open.ts";
+import { absorbPreviewedUrl } from "../reading/module.ts";
 
 export interface LinkPreview {
   url: string;
@@ -56,6 +57,13 @@ function save(db: Db, p: LinkPreview): void {
     `INSERT OR REPLACE INTO link_previews (url, status, title, description, image, site_name, fetched_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(p.url, p.status, p.title, p.description, p.image, p.siteName, p.fetchedAt);
+  if (p.status === "ok" && (p.title || p.description)) {
+    try {
+      absorbPreviewedUrl(db, p.url, p.title);
+    } catch {
+      // Preview must not fail the Desk card if Reading discovery throws.
+    }
+  }
 }
 
 function rowToPreview(r: PreviewRow): LinkPreview {

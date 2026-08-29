@@ -128,14 +128,18 @@ function postToChange(post, i) {
 }
 
 async function flush(origin, token, sessionId, sequence, posts, start) {
-  if (posts.length === 0) return sequence;
-  await postJson(origin, token, "/capture/v1/batches", {
-    sessionId,
-    sequence,
-    idempotencyKey: `${sessionId}:${sequence}`,
-    changes: posts.map((post, i) => postToChange(post, start + i)),
-  });
-  return sequence + 1;
+  const SIZE = 100; // protocol max per batch
+  for (let i = 0; i < posts.length; i += SIZE) {
+    const slice = posts.slice(i, i + SIZE);
+    await postJson(origin, token, "/capture/v1/batches", {
+      sessionId,
+      sequence,
+      idempotencyKey: `${sessionId}:${sequence}`,
+      changes: slice.map((post, j) => postToChange(post, start + i + j)),
+    });
+    sequence += 1;
+  }
+  return sequence;
 }
 
 async function ensurePaired() {

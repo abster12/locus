@@ -89,9 +89,11 @@ export function isPlatformPermalink(url: string): boolean {
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, "");
-    if (/(^|\.)(x|twitter)\.com$/i.test(host)) return /\/status\/\d+/.test(u.pathname);
+    if (/(^|\.)(x|twitter)\.com$/i.test(host)) {
+      return /\/status\/\d+/.test(u.pathname) || /^\/i\/broadcasts\//i.test(u.pathname);
+    }
     if (/(^|\.)instagram\.com$/i.test(host)) return /\/(p|reel|tv)\//.test(u.pathname);
-    if (/(^|\.)reddit\.com$/i.test(host)) return /\/comments\//.test(u.pathname);
+    if (/(^|\.)reddit\.com$/i.test(host)) return /\/(comments|gallery)\//.test(u.pathname);
     if (/(^|\.)(youtube\.com|youtu\.be)$/i.test(host)) return Boolean(youtubeVideoId(url));
     return false;
   } catch {

@@ -16,6 +16,11 @@ export function browserProfileDir(source: string, accountId: string): string {
   return join(locusHome(), "browsers", source, accountId);
 }
 
+/** Rebuildable Reading image cache. Override with LOCUS_READING_ASSETS in tests. */
+export function readingAssetsRoot(): string {
+  return process.env.LOCUS_READING_ASSETS || join(locusHome(), "reading-assets");
+}
+
 export function openDb(path = join(locusHome(), "locus.db")): Db {
   mkdirSync(join(path, ".."), { recursive: true });
   const db = new DatabaseSync(path);

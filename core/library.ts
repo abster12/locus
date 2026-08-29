@@ -1,4 +1,5 @@
-import type { Db } from "../db/open.ts";
+import { rmSync } from "node:fs";
+import { readingAssetsRoot, type Db } from "../db/open.ts";
 import { localDay } from "./dates.ts";
 export { localDay } from "./dates.ts";
 import { dateLabel, type DateLabel, type ItemStatus, type SourceId } from "./types.ts";
@@ -415,27 +416,12 @@ export function buildSummary(
   };
 }
 
-export function exportLibrary(db: Db): unknown {
-  return {
-    exportedAt: new Date().toISOString(),
-    items: listItems(db, {}),
-    collections: listCollections(db),
-    tags: listTags(db),
-    notes: db.prepare(`SELECT * FROM notes`).all(),
-    activities: db.prepare(`SELECT * FROM activities`).all(),
-    sourceAccounts: db.prepare(`SELECT id, source, external_id, display_name, created_at FROM source_accounts`).all(),
-    sourceCollections: db.prepare(`SELECT * FROM source_collections`).all(),
-    captureRuns: db
-      .prepare(
-        `SELECT id, source_collection_id, producer_id, producer_version, started_at, finished_at, coverage, status,
-                seen_count, upserted_count, removed_count, error_code FROM capture_runs`,
-      )
-      .all(),
-  };
-}
-
 export function wipeLibrary(db: Db): void {
   const tables = [
+    "reading_assets",
+    "reading_progress",
+    "reading_provenance",
+    "reading_documents",
     "link_previews",
     "summaries",
     "notes",
@@ -456,4 +442,5 @@ export function wipeLibrary(db: Db): void {
     "source_accounts",
   ];
   for (const table of tables) db.exec(`DELETE FROM ${table}`);
+  rmSync(readingAssetsRoot(), { recursive: true, force: true });
 }
