@@ -290,7 +290,117 @@ export const api = {
     req<ImportResult>("/api/import/jsonl", { method: "POST", body: JSON.stringify({ text, dryRun }) }),
   importReddit: (postsCsv: string, commentsCsv: string, dryRun: boolean) =>
     req<ImportResult>("/api/import/reddit-export", { method: "POST", body: JSON.stringify({ postsCsv, commentsCsv, dryRun }) }),
+  kitchen: (q: string, signal?: AbortSignal) => req<KitchenIndex>(`/api/kitchen${q ? `?${q}` : ""}`, { signal }),
+  kitchenItem: (id: string, signal?: AbortSignal) =>
+    req<KitchenItem>(`/api/kitchen/items/${encodeURIComponent(id)}`, { signal }),
+  kitchenAi: () => req<{ available: boolean; detail: string }>("/api/kitchen/ai"),
+  makeCookable: (id: string, allowGenerate: boolean) =>
+    req<{ outcome: "created"; document: RecipeDocument } | { outcome: "needs_generation"; dish: string }>(
+      `/api/kitchen/items/${encodeURIComponent(id)}/make-cookable`,
+      { method: "POST", body: JSON.stringify({ allowGenerate }) },
+    ),
+  saveRecipe: (id: string, body: { expectedSourceRevision: string; status: "draft" | "reviewed"; draft: unknown }) =>
+    req<{ document: RecipeDocument }>(`/api/kitchen/items/${encodeURIComponent(id)}/recipe`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  removeRecipe: (id: string) =>
+    req<{ removed: boolean }>(`/api/kitchen/items/${encodeURIComponent(id)}/recipe/remove`, { method: "POST", body: "{}" }),
+  tonight: (signal?: AbortSignal) => req<TonightEntry[]>("/api/kitchen/tonight", { signal }),
+  addTonight: (itemId: string) =>
+    req<TonightEntry>("/api/kitchen/tonight", { method: "POST", body: JSON.stringify({ itemId }) }),
+  reorderTonight: (entryIds: string[]) =>
+    req<TonightEntry[]>("/api/kitchen/tonight/reorder", { method: "POST", body: JSON.stringify({ entryIds }) }),
+  removeTonight: (entryId: string) =>
+    req<{ removed: boolean }>(`/api/kitchen/tonight/${encodeURIComponent(entryId)}/remove`, { method: "POST", body: "{}" }),
+  clearTonight: () => req<{ removed: number }>("/api/kitchen/tonight/clear", { method: "POST", body: "{}" }),
 };
+
+export interface RecipeSummary {
+  id: string;
+  itemId: string;
+  status: "draft" | "reviewed";
+  sourceChanged: boolean;
+  title: string | null;
+  servings: string | null;
+  totalTime: string | null;
+}
+
+export interface RecipeDocument extends RecipeSummary {
+  sourceRevision: string;
+  sourceCaption: string;
+  updatedBy: "user" | "agent";
+  provenance: "caption" | "generated" | "user";
+  draft: {
+    version: 1;
+    title?: string;
+    titleEvidence?: RecipeEvidence;
+    servings?: string;
+    servingsEvidence?: RecipeEvidence;
+    totalTime?: string;
+    totalTimeEvidence?: RecipeEvidence;
+    ingredients: {
+      id: string;
+      raw: string;
+      quantity?: string;
+      unit?: string;
+      name: string;
+      preparation?: string;
+      group?: string;
+      evidence: RecipeEvidence;
+    }[];
+    steps: {
+      id: string;
+      instruction: string;
+      ingredientIds: string[];
+      duration?: string;
+      temperature?: string;
+      evidence: RecipeEvidence;
+    }[];
+  };
+  score: RecipeScore;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RecipeEvidence =
+  | { kind: "caption"; spans: { start: number; end: number; text: string }[] }
+  | { kind: "user" }
+  | { kind: "generated" };
+
+export interface RecipeScore {
+  placed: { ingredient: RecipeDocument["draft"]["ingredients"][number]; firstStepId: string }[];
+  unreferenced: RecipeDocument["draft"]["ingredients"][number][];
+  steps: {
+    step: RecipeDocument["draft"]["steps"][number];
+    ingredients: RecipeDocument["draft"]["ingredients"][number][];
+  }[];
+}
+
+export interface KitchenItem {
+  item: ItemCard;
+  availability: "reviewed" | "draft" | "caption" | "watch" | "source_only";
+  caption: string | null;
+  canWatch: boolean;
+  displayTitle: string;
+  showCaptionPreview: boolean;
+  recipe: RecipeSummary | RecipeDocument | null;
+}
+
+export interface TonightEntry {
+  id: string;
+  itemId: string;
+  order: number;
+  createdAt: string;
+  item: KitchenItem | null;
+}
+
+export interface KitchenIndex {
+  items: KitchenItem[];
+  nextCursor: string | null;
+  counts: { foodSaves: number; structuredRecipes: number; tonight: number };
+  sources?: string[];
+}
 
 export interface SummarySnapshot {
   scope: string;

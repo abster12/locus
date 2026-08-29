@@ -184,6 +184,9 @@ export function ItemList({
               <span className="n">{counts.shelves[shelf.key] ?? 0}</span>
             </button>
           ))}
+          <p className="rail-foot">
+            <a href="#/collections">Collections</a>
+          </p>
         </aside>
         <div>
           <div className="toolbar">

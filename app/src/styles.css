@@ -714,3 +714,281 @@ html[data-theme="dark"] .stage-wv { background: #111; }
   .stage-statuses { align-items: flex-start; }
   .snooze-date { margin-left: 0; width: 100%; }
 }
+
+/* ---------- kitchen ---------- */
+.kitchen { --food: #d64541; }
+.kitchen-pagehead { margin-bottom: 18px; }
+.kitchen-pagehead .pagehead { margin-bottom: 2px; }
+.kitchen-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0 4px; }
+.kitchen-search {
+  flex: 1; min-width: 200px; max-width: 420px; display: flex;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 999px; padding: 9px 16px;
+}
+.kitchen-search:focus-within { border-color: var(--ink); }
+.kitchen-search input { border: 0; background: none; outline: none; width: 100%; font-size: 13.5px; }
+.kitchen-sourcefilter { display: flex; gap: 6px; flex-wrap: wrap; }
+.kitchen-toggle { display: none; }
+.kitchen-notice { min-height: 1.2em; color: var(--mute); font-size: 12.5px; margin: 4px 0 10px; }
+.kitchen-notice:empty { display: none; }
+
+.kitchen-root { display: grid; grid-template-columns: minmax(0, 1fr) 264px; gap: 34px; align-items: start; }
+.kitchen-main { min-width: 0; }
+
+.kitchen-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.kitchen-row {
+  display: grid; grid-template-columns: minmax(96px, 144px) minmax(0, 1fr) auto;
+  gap: 16px; align-items: center; padding: 15px 6px 14px; border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+}
+.kitchen-row:hover { background: color-mix(in srgb, var(--wash) 55%, transparent); }
+.kitchen-row-open { display: contents; color: inherit; text-decoration: none; }
+.kitchen-thumb { width: 144px; height: 96px; border-radius: 6px; overflow: hidden; background: var(--wash); display: flex; align-items: center; justify-content: center; }
+.kitchen-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kitchen-thumb-bowl { width: 26px; height: 26px; border-radius: 50%; border: 2.5px solid var(--food); border-top-color: transparent; transform: rotate(35deg); opacity: .75; }
+.kitchen-row-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.kitchen-row-title {
+  font-family: var(--display); font-size: 17px; line-height: 1.25; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.kitchen-row-caption {
+  color: var(--mute); font-size: 12.5px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.kitchen-row-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--mute); font-size: 11.5px; }
+.kitchen-avail { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--mute); }
+.kitchen-avail-reviewed, .kitchen-avail-draft { color: var(--food); }
+.kitchen-row-actions { display: flex; align-items: center; gap: 8px; justify-self: end; }
+.kitchen-on-tonight { color: var(--food); border-color: color-mix(in srgb, var(--food) 45%, transparent); cursor: default; }
+.kitchen-more { position: relative; }
+.kitchen-more summary { list-style: none; cursor: pointer; padding: 2px 8px; border-radius: 6px; color: var(--mute); }
+.kitchen-more summary::-webkit-details-marker { display: none; }
+.kitchen-more[open] summary::before { content: ""; position: fixed; inset: 0; }
+.kitchen-more > a {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; white-space: nowrap;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 12px;
+  font-size: 12px; box-shadow: var(--lift); text-decoration: none; color: var(--ink);
+}
+.kitchen-loadmore { margin: 18px 0 0; }
+
+.kitchen-skeleton { cursor: default; }
+.kitchen-skeleton-lines { display: flex; flex-direction: column; gap: 8px; }
+.kitchen-skeleton-lines span { height: 13px; border-radius: 4px; background: var(--wash); }
+.kitchen-skeleton-lines span:last-child { width: 60%; }
+@media (prefers-reduced-motion: no-preference) {
+  .kitchen-skeleton-lines span, .kitchen-skeleton .kitchen-thumb { animation: kitchen-pulse 1.4s ease-in-out infinite; }
+  @keyframes kitchen-pulse { 50% { opacity: .55; } }
+}
+
+.kitchen-tonight { position: sticky; top: 20px; border: 1px solid var(--rule); border-radius: 10px; background: var(--card); padding: 14px 14px 12px; }
+.kitchen-tonight h2 { margin: 0 0 10px; font-family: var(--display); font-size: 15px; }
+.kitchen-tonight h2::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 7px; border-radius: 50%; background: var(--food); opacity: .8; }
+.kitchen-tonight-empty { color: var(--mute); font-size: 12.5px; margin: 0; }
+.kitchen-tonight-list { list-style: none; margin: 0; padding: 0; }
+.kitchen-tonight-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: center;
+  padding: 7px 0; border-bottom: 1px solid var(--rule); font-size: 13px;
+}
+.kitchen-tonight-row:last-child { border-bottom: 0; }
+.kitchen-handle { color: var(--mute); cursor: grab; font-size: 11px; }
+.kitchen-tonight-open { display: flex; align-items: center; gap: 8px; min-width: 0; color: inherit; text-decoration: none; }
+.kitchen-tonight-open img { width: 34px; height: 34px; border-radius: 5px; object-fit: cover; flex: none; }
+.kitchen-tonight-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.kitchen-tonight-missing { color: var(--mute); font-style: italic; }
+.kitchen-tonight-actions { display: flex; gap: 2px; }
+.kitchen-tonight-actions button {
+  border: 0; background: none; color: var(--mute); width: 28px; height: 28px; border-radius: 6px; padding: 0; line-height: 1;
+}
+.kitchen-tonight-actions button:hover { background: var(--wash); color: var(--ink); }
+.kitchen-tonight-actions button:disabled { opacity: .3; cursor: default; }
+.kitchen-clear { margin-top: 12px; width: 100%; }
+
+/* detail */
+.kitchen-detail { max-width: 900px; }
+.kitchen-detail-head { border-bottom: 1px solid var(--rule); padding-bottom: 16px; margin-bottom: 18px; }
+.kitchen-back { margin: 0 0 14px; }
+.kitchen-back a {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 12px 0 9px;
+  border: 1px solid var(--rule); border-radius: 999px; background: var(--card); color: var(--mute);
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-decoration: none; text-transform: uppercase;
+  transition: border-color .15s ease, color .15s ease, transform .15s ease;
+}
+.kitchen-back a:hover { border-color: var(--ink); color: var(--ink); transform: translateX(-2px); }
+.kitchen-back svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.kitchen-detail-titlerow { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.kitchen-detail-titlerow h1 { margin: 0; font-size: 30px; }
+.kitchen-state-reviewed { color: var(--food); border-color: color-mix(in srgb, var(--food) 45%, transparent); }
+.kitchen-detail-byline { display: flex; align-items: center; gap: 10px; color: var(--mute); font-size: 13px; margin: 6px 0 0; }
+.kitchen-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.kitchen-make-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kitchen-detail-facts { display: flex; gap: 10px; color: var(--mute); font-size: 12.5px; margin-left: 6px; }
+.kitchen-embed, .kitchen-video, .kitchen-media { width: 100%; max-width: 640px; aspect-ratio: 16 / 10; border: 1px solid var(--rule); border-radius: 10px; background: var(--card); }
+.kitchen-embed-instagram { max-width: 540px; aspect-ratio: 4 / 5; }
+.kitchen-media { aspect-ratio: auto; }
+.kitchen-watch h2 { font-family: var(--display); font-size: 19px; margin: 26px 0 8px; }
+.kitchen-caption-text {
+  white-space: pre-wrap; line-height: 1.65; font-size: 15.5px; max-width: 62ch;
+}
+.kitchen-caption-text a { color: var(--accent); }
+
+.kitchen-changed { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); border-radius: 8px; padding: 10px 14px; margin: 0 0 18px; font-size: 13px; }
+.kitchen-changed p { margin: 0 0 6px; }
+.kitchen-changed details { margin: 6px 0; }
+.kitchen-compare-old { color: var(--mute); white-space: pre-wrap; border-left: 2px solid var(--rule); padding-left: 10px; }
+.kitchen-compare-new { white-space: pre-wrap; border-left: 2px solid var(--food); padding-left: 10px; }
+
+.kitchen-generation {
+  max-width: 620px; margin: 0 0 24px; padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--food) 45%, var(--rule));
+  border-left: 4px solid var(--food); border-radius: 8px; background: color-mix(in srgb, var(--food) 5%, var(--card));
+}
+.kitchen-generation-kicker { margin: 0 0 5px; color: var(--food); font-size: 10.5px; font-weight: 650; letter-spacing: .11em; text-transform: uppercase; }
+.kitchen-generation h2 { margin: 0 0 8px; font-family: var(--display); font-size: 19px; }
+.kitchen-generation > p:not(.kitchen-generation-kicker) { max-width: 58ch; margin: 0 0 14px; color: var(--mute); font-size: 13.5px; line-height: 1.55; }
+.kitchen-generation > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.kitchen-ai-error { max-width: 620px; margin: 0 0 22px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--rule)); border-radius: 8px; }
+.kitchen-ai-error p { margin: 0 0 10px; font-size: 13px; }
+.kitchen-provenance { margin: 0 0 15px; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--mute); }
+.kitchen-provenance-generated { color: var(--warn); }
+
+.kitchen-score {
+  --score-ing: clamp(190px, 28vw, 280px);
+  --score-spine: 58px;
+  --score-columns: minmax(0, var(--score-ing)) var(--score-spine) minmax(0, 1fr);
+  display: grid;
+  grid-template-columns: var(--score-columns);
+  margin: 8px 0 22px;
+}
+.kitchen-score h2, .kitchen-score h3 { font-family: var(--display); font-size: 15px; margin: 0 0 10px; letter-spacing: .04em; }
+.kitchen-score h3 { color: var(--mute); font-size: 13px; }
+.kitchen-score-heading { min-width: 0; padding-bottom: 9px; border-bottom: 1px solid var(--ink); }
+.kitchen-score-heading h2 { margin: 0; }
+.kitchen-score-heading-ing { grid-column: 1; padding-right: 18px; text-align: right; }
+.kitchen-score-heading-method { grid-column: 3; padding-left: 12px; }
+.kitchen-score-flow { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; counter-reset: kitchen-step; }
+.kitchen-score-row { display: grid; grid-template-columns: var(--score-columns); align-items: center; min-width: 0; min-height: 82px; }
+.kitchen-score-ing { align-self: center; min-width: 0; padding-right: 18px; text-align: right; }
+.kitchen-score-ing ul, .kitchen-score-unplaced ul { list-style: none; margin: 0; padding: 8px 0; }
+.kitchen-score-spine { position: relative; display: grid; place-items: center; align-self: stretch; min-width: 0; min-height: 82px; }
+.kitchen-score-spine::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px;
+  background: var(--rule); transform: translateX(-50%);
+}
+.kitchen-score-row:first-child .kitchen-score-spine::before { top: 50%; }
+.kitchen-score-row:last-child .kitchen-score-spine::before { bottom: 50%; }
+.kitchen-step-node {
+  position: relative; z-index: 1; display: grid; place-items: center; width: 34px; height: 34px;
+  border: 1px solid var(--accent); border-radius: 50%; color: var(--accent); background: var(--card);
+  font-family: var(--mono); font-size: 11px; font-weight: 700; line-height: 1;
+}
+.kitchen-score-no-ing { display: block; padding-right: 8px; color: var(--rule); text-align: right; }
+.kitchen-score-empty { grid-column: 1 / -1; }
+.kitchen-score-unplaced { grid-column: 1; margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.kitchen-ing { padding: 7px 8px; border-bottom: 1px solid var(--rule); font-size: 14px; border-radius: 6px; }
+.kitchen-ing-group { display: block; margin: 2px 0 5px; color: var(--food); font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+.kitchen-ing-text { display: block; overflow-wrap: anywhere; }
+.kitchen-ing-raw { color: var(--mute); font-size: 12px; }
+.kitchen-ing-later { display: block; color: var(--mute); font-size: 11px; margin-top: 2px; }
+.kitchen-step { align-self: center; min-width: 0; padding: 15px 12px 13px; border-bottom: 1px solid var(--rule); border-radius: 6px; }
+.kitchen-step p { margin: 0; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; }
+.kitchen-step-ings { display: block; color: var(--food); font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 3px; }
+.kitchen-step-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--mute); font-size: 11.5px; }
+.kitchen-step-time {
+  display: inline-flex; align-items: center; padding: 4px 7px; border: 1px solid var(--accent); border-radius: 4px;
+  color: #fff; background: var(--accent); font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+  line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.kitchen-step-temperature { padding: 3px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kitchen-ing.hot, .kitchen-step.hot { background: color-mix(in srgb, var(--food) 7%, transparent); }
+.kitchen-usermark { color: var(--warn); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.kitchen-captionmark { color: var(--mute); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.kitchen-generatedmark { color: var(--warn); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+.kitchen-evidence-excerpt { color: var(--mute); font-size: 13px; margin: 0 0 12px; }
+.kitchen-source-caption { margin: 26px 0 0; border-top: 1px solid var(--rule); padding-top: 12px; }
+.kitchen-source-caption summary { cursor: pointer; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--mute); }
+.kitchen-source-caption p { white-space: pre-wrap; line-height: 1.6; font-size: 14px; color: var(--mute); max-width: 62ch; }
+
+/* writable score (edit mode) — the score itself is the editor */
+.kitchen-edit [contenteditable] { outline: none; cursor: text; min-width: 2ch; }
+.kitchen-edit [contenteditable]:focus { box-shadow: inset 0 -1px 0 var(--accent); }
+.kitchen-edit [contenteditable]:empty::before { content: attr(data-ph); color: var(--mute); }
+.kitchen-edit-title { flex: 1; min-width: 8ch; font-family: var(--display); font-weight: 500; font-size: 30px; line-height: 1.15; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.kitchen-edit-fact { min-width: 3ch; }
+.kitchen-facts-edit { position: relative; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin: 2px 0 0; padding: 4px 84px 4px 0; color: var(--mute); font-size: 13px; border-radius: 8px; }
+.kitchen-facts-edit.pending { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.kitchen-facts-dot { opacity: .5; }
+.kitchen-facts-edit .kitchen-accept { position: absolute; right: 0; top: 1px; }
+.kitchen-accept { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.kitchen-tick, .kitchen-cross { width: 28px; height: 28px; border-radius: 50%; padding: 0; line-height: 1; font-size: 14px; }
+.kitchen-tick { border: 0; background: var(--accent); color: #fff; font-weight: 700; }
+.kitchen-cross { border: 1px solid var(--rule); background: var(--card); color: var(--mute); }
+.kitchen-cross:hover { color: var(--ink); }
+.kitchen-tick:disabled, .kitchen-cross:disabled { opacity: .4; cursor: default; }
+.kitchen-score-edit .pending { background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 8px; }
+.kitchen-score-edit .kitchen-step { position: relative; }
+.kitchen-score-edit .kitchen-step.pending { padding-right: 84px; }
+.kitchen-score-edit .kitchen-step .kitchen-accept { position: absolute; right: 8px; bottom: 10px; }
+.kitchen-step-text { font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; min-height: 1.55em; }
+.kitchen-composer .kitchen-step-text { min-height: 2.4em; }
+.kitchen-composer .kitchen-step-node { border-style: dashed; color: var(--mute); border-color: var(--mute); }
+.kitchen-composer .kitchen-step-node.live { border-style: solid; color: var(--accent); border-color: var(--accent); }
+.kitchen-composer .kitchen-step { border-bottom-style: dashed; }
+.kitchen-edit .kitchen-step.removing .kitchen-step-text { text-decoration: line-through; opacity: .55; }
+.kitchen-edit .kitchen-step.removing .kitchen-step-meta { opacity: .55; }
+.kitchen-edit .kitchen-step-time { width: 5.2rem; }
+.kitchen-edit .kitchen-step-time::placeholder { color: color-mix(in srgb, #fff 72%, transparent); }
+.kitchen-edit .kitchen-step-temp { width: 11rem; background: none; border: 0; border-bottom: 1px solid transparent; padding: 3px 0; }
+.kitchen-edit .kitchen-step-temp:focus { border-bottom-color: var(--accent); color: var(--ink); }
+.kitchen-edit .kitchen-step-temp::placeholder { color: var(--mute); }
+.kitchen-ing-read { display: block; width: 100%; border: 0; background: none; padding: 0; color: inherit; font: inherit; text-align: inherit; cursor: text; }
+.kitchen-ing.editing .kitchen-ing-read { display: none; }
+.kitchen-ing-edit { display: none; justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
+.kitchen-ing.editing .kitchen-ing-edit { display: flex; }
+.kitchen-ing-edit input { min-width: 0; background: var(--wash); border: 1px solid var(--rule); border-radius: 4px; padding: 3px 6px; font-size: 12px; }
+.kitchen-ing-edit input:focus { outline: none; border-color: var(--accent); }
+.kitchen-ing-edit .q { width: 3.2rem; text-align: right; }
+.kitchen-ing-edit .u { width: 2.6rem; }
+.kitchen-ing-edit .n { width: 9rem; }
+.kitchen-ing .kitchen-accept { margin-top: 6px; width: 100%; justify-content: flex-end; }
+.kitchen-ghost-add { border: 0; background: none; color: var(--mute); font-size: 11.5px; padding: 6px 0; cursor: pointer; }
+.kitchen-ghost-add:hover { color: var(--accent); }
+.kitchen-beat-tools { position: absolute; right: 0; top: 6px; display: flex; gap: 3px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.kitchen-score-row:hover .kitchen-beat-tools, .kitchen-score-row:focus-within .kitchen-beat-tools { opacity: 1; pointer-events: auto; }
+.kitchen-beat-tools button { border: 0; background: var(--wash); color: var(--mute); width: 26px; height: 26px; border-radius: 6px; padding: 0; line-height: 1; }
+.kitchen-beat-tools button:hover { color: var(--ink); }
+.kitchen-beat-tools button:disabled { opacity: .3; cursor: default; }
+.kitchen-place-hint { color: var(--mute); font-size: 11.5px; margin: 4px 0 0; }
+.kitchen-place-on { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; align-items: center; margin-top: 6px; }
+.kitchen-place-on > span { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
+.kitchen-place-on button { width: 26px; height: 26px; border-radius: 50%; padding: 0; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-family: var(--mono); font-size: 11px; font-weight: 700; }
+.kitchen-place-on button:hover { background: var(--accent); color: #fff; }
+.kitchen-more > button { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; white-space: nowrap; }
+
+@media (max-width: 1099px) {
+  .kitchen-root { grid-template-columns: minmax(0, 1fr); }
+  .kitchen-toggle {
+    display: inline-flex; margin-left: auto;
+    border: 1px solid var(--rule); background: var(--card); border-radius: 999px; padding: 10px 16px; font-size: 12.5px;
+  }
+  .kitchen-pane-tonight .kitchen-main { display: none; }
+  .kitchen:not(.kitchen-pane-tonight) .kitchen-tonight { display: none; }
+  .kitchen-tonight { position: static; }
+}
+@media (max-width: 899px) {
+  .kitchen-score { --score-spine: 44px; display: block; }
+  .kitchen-score-heading-ing { border-bottom: 0; padding-right: 0; text-align: left; }
+  .kitchen-score-heading-method { margin-top: 22px; padding-left: 0; }
+  .kitchen-score-flow { margin-top: 8px; }
+  .kitchen-score-row { grid-template-columns: var(--score-spine) minmax(0, 1fr); align-items: stretch; min-height: 0; }
+  .kitchen-score-ing { grid-column: 2; grid-row: 1; align-self: center; padding: 12px 0 2px; text-align: left; }
+  .kitchen-score-spine { grid-column: 1; grid-row: 1 / span 2; align-self: stretch; min-height: 0; }
+  .kitchen-step { grid-column: 2; grid-row: 2; align-self: center; padding: 4px 0 18px; }
+  .kitchen-score-no-ing { padding-right: 0; text-align: left; }
+  .kitchen-score-unplaced { margin-bottom: 22px; }
+  .kitchen-row { grid-template-columns: 96px minmax(0, 1fr); }
+  .kitchen-thumb { width: 96px; height: 72px; }
+  .kitchen-row-actions { grid-column: 1 / -1; justify-self: start; }
+  .kitchen-row-actions .btn, .kitchen-row-actions .chip, .kitchen-more summary { min-height: 44px; display: inline-flex; align-items: center; }
+  .kitchen-detail-titlerow h1 { font-size: 25px; }
+  .kitchen-tick, .kitchen-cross, .kitchen-beat-tools button, .kitchen-place-on button { width: 44px; height: 44px; font-size: 16px; }
+  .kitchen-ghost-add { min-height: 44px; }
+}

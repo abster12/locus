@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Locus — kitchen edit prototype</title>
+<!-- In-place kitchen score editor. Throwaway. Toggle existing / new. -->
+<style>
+  :root {
+    --paper: #0c0c0d;
+    --card: #141416;
+    --ink: #eceae6;
+    --mute: #8d8882;
+    --rule: #2c2b29;
+    --wash: #1b1a19;
+    --coral: #e3927e;
+    --gold: #d4b45a;
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --ui: "Avenir Next", Avenir, "Gill Sans", "Gill Sans MT", system-ui, sans-serif;
+    --mono: "SF Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body {
+    margin: 0; color: var(--ink); background: var(--paper);
+    font-family: var(--ui); -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; background-image: var(--grain);
+    pointer-events: none; z-index: 40;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--coral); outline-offset: 2px; }
+  [contenteditable] { outline: none; }
+  [contenteditable]:focus { box-shadow: inset 0 -1px 0 var(--coral); }
+  [contenteditable]:empty::before { content: attr(data-ph); color: var(--mute); }
+
+  .shell { max-width: 1080px; margin: 0 auto; padding: 28px 26px 140px; }
+  .wordmark { font-family: var(--display); font-size: 34px; line-height: .9; letter-spacing: -.03em; margin: 0; }
+  .wordmark::after { content: "."; color: var(--coral); }
+  .lede { margin: 8px 0 0; color: var(--mute); font-size: 13.5px; max-width: 72ch; }
+  .masthead {
+    display: flex; justify-content: space-between; align-items: end; gap: 18px;
+    border-bottom: 3px double var(--ink); padding-bottom: 14px;
+  }
+  .proto-tag { font-family: var(--mono); font-size: 11px; color: var(--mute); letter-spacing: .06em; text-transform: uppercase; }
+  .how {
+    margin: 16px 0 22px; padding: 12px 14px; background: var(--card);
+    border: 1px solid var(--rule); border-radius: 10px; font-size: 13.5px;
+    line-height: 1.5; color: var(--mute);
+  }
+  .how strong { color: var(--ink); font-weight: 600; }
+  .how em { color: var(--gold); font-style: normal; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+
+  .pill {
+    border: 1px solid var(--rule); background: transparent; color: var(--ink);
+    border-radius: 999px; padding: 7px 14px; font-size: 11px;
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .pill.solid { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .pill.ghost { color: var(--mute); }
+  .pill:disabled { opacity: .4; cursor: default; }
+  .iconish {
+    border: 0; background: var(--wash); color: var(--mute); width: 26px; height: 26px;
+    border-radius: 6px; padding: 0; line-height: 1;
+  }
+  .iconish:hover { color: var(--ink); }
+  .iconish:disabled { opacity: .3; }
+
+  .head { border-bottom: 1px solid var(--rule); padding-bottom: 16px; margin-bottom: 18px; }
+  .kicker { margin: 0 0 10px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+  .title-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .chip-draft {
+    display: inline-flex; align-items: center; flex: none;
+    border: 1px solid color-mix(in srgb, var(--coral) 50%, transparent);
+    color: var(--coral); border-radius: 999px; padding: 2px 9px;
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .chip-draft[hidden] { display: none; }
+  .title-row h1, .title-row [data-k="title"] {
+    margin: 0; font-family: var(--display); font-size: 30px; font-weight: 500; min-width: 8ch; flex: 1;
+  }
+  .facts {
+    display: flex; flex-wrap: wrap; gap: 8px; color: var(--mute); font-size: 13px; margin: 8px 0 0;
+  }
+  .facts [data-k] { min-width: 3ch; }
+  .facts .dot { opacity: .5; }
+  .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .notice { margin: 10px 0 0; color: var(--gold); font-size: 12.5px; min-height: 1em; }
+  .prov { margin: 0 0 16px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--gold); }
+  .facts-unit { position: relative; padding-right: 84px; }
+  .accept {
+    display: none; align-items: center; gap: 4px; flex: none;
+  }
+  [data-unit].pending > .accept { display: inline-flex; }
+  .facts-unit > .accept { position: absolute; right: 0; top: 4px; }
+  .beat > .accept { position: absolute; right: 8px; bottom: 10px; }
+  .ing > .accept { margin-top: 6px; width: 100%; justify-content: flex-end; }
+  .tick, .cross {
+    width: 28px; height: 28px; border-radius: 50%; padding: 0; line-height: 1; font-size: 14px;
+  }
+  .tick { border: 0; background: var(--coral); color: #1a120f; font-weight: 700; }
+  .cross { border: 1px solid var(--rule); background: var(--wash); color: var(--mute); }
+  .cross:hover { color: var(--ink); }
+  [data-unit].pending { background: color-mix(in srgb, var(--coral) 7%, transparent); border-radius: 8px; }
+  .beat.pending { padding-right: 84px; }
+
+  /* shared score (A, B/score, D) — cooking timeline, now writable */
+  .score {
+    --ing: clamp(190px, 28vw, 280px);
+    --spine: 58px;
+    display: grid; grid-template-columns: minmax(0, var(--ing)) var(--spine) minmax(0, 1fr);
+  }
+  .score h2 { font-family: var(--display); font-size: 15px; margin: 0; letter-spacing: .04em; font-weight: 500; }
+  .h-ing { grid-column: 1; padding: 0 18px 9px 0; text-align: right; border-bottom: 1px solid var(--ink); }
+  .h-method { grid-column: 3; padding: 0 0 9px 12px; border-bottom: 1px solid var(--ink); }
+  .flow { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; }
+  .row { display: grid; grid-template-columns: minmax(0, var(--ing)) var(--spine) minmax(0, 1fr); align-items: center; min-height: 82px; }
+  .col-ing { align-self: center; min-width: 0; padding: 8px 18px 8px 0; text-align: right; }
+  .col-ing ul { list-style: none; margin: 0; padding: 0; }
+  .spine { position: relative; display: grid; place-items: center; align-self: stretch; }
+  .spine::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px;
+    background: var(--rule); transform: translateX(-50%);
+  }
+  .flow li:first-child .spine::before { top: 50%; }
+  .flow li:last-child .spine::before { bottom: 50%; }
+  .node {
+    position: relative; z-index: 1; display: grid; place-items: center;
+    width: 34px; height: 34px; border: 1px solid var(--coral); border-radius: 50%;
+    color: var(--coral); background: var(--paper);
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+  }
+  .beat { align-self: center; min-width: 0; padding: 15px 12px 13px; border-bottom: 1px solid var(--rule); position: relative; }
+  .beat p, .beat [data-k$=".text"] { margin: 0; font-size: 15px; line-height: 1.55; }
+  .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--mute); font-size: 11.5px; }
+  .time {
+    background: var(--coral); color: #1a120f; border: 0; border-radius: 4px;
+    padding: 4px 7px; font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    width: 5.2rem;
+  }
+  .temp {
+    background: transparent; border: 0; border-bottom: 1px solid transparent;
+    color: var(--mute); width: 11rem; padding: 3px 0; font-variant-numeric: tabular-nums;
+  }
+  .temp:focus { border-bottom-color: var(--coral); color: var(--ink); }
+  .you { color: var(--gold); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+  .fromcap { color: var(--mute); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; }
+  .ing { padding: 7px 8px; border-bottom: 1px solid var(--rule); border-radius: 6px; font-size: 14px; cursor: text; }
+  .grp { display: block; margin: 2px 0 5px; color: var(--coral); font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+  .ing-read { display: block; }
+  .ing-read b { font-weight: 500; }
+  .ing-raw { color: var(--mute); font-size: 12px; }
+  .ing-edit { display: none; justify-content: flex-end; gap: 4px; flex-wrap: wrap; }
+  .ing.editing .ing-edit { display: flex; }
+  .ing.editing .ing-read { display: none; }
+  .ing-edit input {
+    background: var(--wash); border: 1px solid var(--rule); border-radius: 4px;
+    padding: 3px 6px; font-size: 12px; min-width: 0;
+  }
+  .ing-edit .q { width: 3.2rem; text-align: right; }
+  .ing-edit .u { width: 2.6rem; }
+  .ing-edit .n { width: 9rem; text-align: right; }
+  .ghost-add {
+    border: 0; background: none; color: var(--mute); font-size: 11.5px; padding: 6px 0;
+  }
+  .ghost-add:hover { color: var(--coral); }
+  .tools {
+    position: absolute; right: 0; top: 6px; display: flex; gap: 3px;
+    opacity: 0; pointer-events: none; transition: opacity .15s;
+  }
+  .row:hover .tools, .row:focus-within .tools { opacity: 1; pointer-events: auto; }
+  .chip {
+    border: 1px solid var(--rule); background: transparent; color: var(--mute);
+    border-radius: 999px; padding: 3px 9px; font-size: 11px;
+  }
+  .chip.on { border-color: var(--coral); color: var(--coral); background: color-mix(in srgb, var(--coral) 10%, transparent); }
+  .unplaced { grid-column: 1; margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--rule); text-align: right; }
+  .unplaced h3 { color: var(--mute); font-size: 13px; font-family: var(--display); font-weight: 500; margin: 0 0 4px; }
+  .unplaced .hint { color: var(--mute); font-size: 11.5px; margin: 0 0 8px; }
+  .place-on { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; margin-top: 6px; align-items: center; }
+  .place-on span { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
+  .place-on button {
+    width: 26px; height: 26px; border-radius: 50%; padding: 0;
+    border: 1px solid var(--coral); background: transparent; color: var(--coral);
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+  }
+  .place-on button:hover { background: var(--coral); color: #1a120f; }
+  .composer .node { border-style: dashed; color: var(--mute); border-color: var(--mute); }
+  .composer .node.live { border-style: solid; color: var(--coral); border-color: var(--coral); }
+  .composer .beat { border-bottom-style: dashed; }
+  .composer [data-k="composer"] {
+    min-height: 2.4em; padding: 4px 0; color: var(--ink);
+  }
+
+  .state {
+    margin-top: 22px; font-family: var(--mono); font-size: 11px; color: var(--mute);
+    white-space: pre-wrap; border-top: 1px dashed var(--rule); padding-top: 10px;
+  }
+
+  .switcher {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 80;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: #f2f0ea; color: #17191b; border-radius: 22px; padding: 10px 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 12.5px;
+  }
+  .switcher .lab { text-align: center; letter-spacing: .02em; }
+  .switcher .lab small { display: block; opacity: .55; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+  .modes { display: flex; gap: 4px; }
+  .modes button {
+    border: 1px solid #cfc9bd; background: transparent; color: inherit;
+    border-radius: 999px; padding: 3px 10px; font-size: 11px;
+  }
+  .modes button.on { background: #17191b; color: #f2f0ea; border-color: #17191b; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (max-width: 860px) {
+    .score, .row { display: block; }
+    .h-ing { text-align: left; padding-right: 0; border-bottom: 0; }
+    .h-method { margin-top: 18px; padding-left: 0; }
+    .col-ing { text-align: left; padding: 12px 0 2px; }
+    .title-row [data-k="title"] { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div>
+      <p class="wordmark">Locus</p>
+      <p class="lede">Throwaway. The cooking score stays on screen. Toggle existing / new to see the same page empty.</p>
+    </div>
+    <p class="proto-tag">kitchen edit · prototype</p>
+  </header>
+  <p class="how" id="how"></p>
+  <div id="stage"></div>
+  <pre class="state" id="state"></pre>
+</div>
+<div class="switcher" id="switcher"></div>
+<script>
+const HOW = "<strong>Pencil the score.</strong> Change a line, then tick to write it. Clicking away keeps the draft local and does not touch the DB. ✕ discards that change.";
+
+function filled() {
+  return {
+    title: "Chocolate banana baked oats",
+    servings: "1 serving",
+    calories: "about 370 calories",
+    totalTime: "26-30 minutes",
+    ingredients: [
+      { id: "i1", qty: "45", unit: "g", name: "rolled oats", raw: "½ cup (45 g) rolled oats", group: "Batter", src: "user" },
+      { id: "i2", qty: "60", unit: "g", name: "ripe banana", raw: "½ medium banana (60 g)", group: "Batter", src: "user" },
+      { id: "i3", qty: "80", unit: "ml", name: "milk", raw: "⅓ cup (80 ml) milk", group: "Batter", src: "user" },
+      { id: "i4", qty: "30", unit: "g", name: "vanilla protein powder", raw: "1 scoop (30 g) vanilla protein powder", group: "Batter", src: "user" },
+      { id: "i5", qty: "8", unit: "g", name: "cocoa powder", raw: "1 tbsp (8 g) cocoa powder", group: "Batter", src: "user" },
+      { id: "i6", qty: "2", unit: "g", name: "baking powder", raw: "½ tsp (2 g) baking powder", group: "Batter", src: "user" },
+      { id: "i7", qty: "", unit: "pinch", name: "table salt", raw: "", group: "Batter", src: "user" },
+      { id: "i8", qty: "5", unit: "g", name: "dark chocolate chips", raw: "1 tsp (5 g) dark chocolate chips", group: "Finish", src: "user" },
+    ],
+    steps: [
+      { id: "s1", text: "Preheat the oven and lightly grease a small oven-safe ramekin.", duration: "5 min", temp: "180°C · 350°F", ings: [], src: "user" },
+      { id: "s2", text: "Blend the oats, banana, milk, protein powder, cocoa, baking powder, and salt until the batter is mostly smooth.", duration: "1 min", temp: "", ings: ["i1","i2","i3","i4","i5","i6","i7"], src: "user" },
+      { id: "s3", text: "Pour the batter into the ramekin and scatter the chocolate chips over the surface.", duration: "2 min", temp: "", ings: ["i8"], src: "user" },
+      { id: "s4", text: "Bake until the centre is just set and the top looks dry. Rest briefly before eating.", duration: "18 min", temp: "180°C · 350°F", ings: [], src: "user" },
+    ],
+  };
+}
+
+function empty() {
+  return {
+    title: "",
+    servings: "",
+    calories: "",
+    totalTime: "",
+    ingredients: [],
+    steps: [],
+  };
+}
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function uid(prefix) {
+  return prefix + Math.random().toString(36).slice(2, 8);
+}
+
+function cloneRecipe(src) {
+  return {
+    title: src.title,
+    servings: src.servings,
+    calories: src.calories,
+    totalTime: src.totalTime,
+    ingredients: src.ingredients.map((row) => ({ ...row })),
+    steps: src.steps.map((step) => ({ ...step, ings: step.ings.slice() })),
+  };
+}
+
+let mode = "existing";
+let recipe = filled();
+let saved = cloneRecipe(recipe);
+let ui = freshUi();
+let pendingFocus = null;
+
+function freshUi() {
+  return {
+    composer: "",
+    notice: "",
+    dirty: false,
+    editingIng: null,
+  };
+}
+
+function readUrl() {
+  mode = new URLSearchParams(location.search).get("mode") === "new" ? "new" : "existing";
+}
+
+function writeUrl() {
+  const u = new URL(location.href);
+  u.searchParams.set("mode", mode);
+  u.searchParams.delete("variant");
+  history.replaceState(null, "", u);
+}
+
+function setMode(next) {
+  mode = next;
+  recipe = mode === "new" ? empty() : filled();
+  saved = cloneRecipe(recipe);
+  ui = freshUi();
+  writeUrl();
+  render();
+}
+
+function factsDirty() {
+  return ["title", "servings", "calories", "totalTime"].some((key) => recipe[key] !== saved[key]);
+}
+
+function ingDirty(id) {
+  const live = recipe.ingredients.find((row) => row.id === id);
+  const db = saved.ingredients.find((row) => row.id === id);
+  if (live && !db) return true;
+  if (!live) return false;
+  return live.qty !== db.qty || live.unit !== db.unit || live.name !== db.name || live.raw !== db.raw || live.group !== db.group;
+}
+
+function stepDirty(id) {
+  const live = recipe.steps.find((step) => step.id === id);
+  const db = saved.steps.find((step) => step.id === id);
+  if (live && !db) return true;
+  if (!live) return false;
+  return live.text !== db.text || live.duration !== db.duration || live.temp !== db.temp || live.ings.join("\0") !== db.ings.join("\0");
+}
+
+function composerDirty() {
+  return Boolean((ui.composer || "").trim());
+}
+
+function showDraftChip() {
+  if (mode !== "new") return false;
+  if (composerDirty()) return true;
+  if (recipe.title.trim() || recipe.servings.trim() || recipe.calories.trim() || recipe.totalTime.trim()) return true;
+  return recipe.ingredients.length > 0 || recipe.steps.length > 0;
+}
+
+function refreshDraftChrome() {
+  const chip = $("stage").querySelector(".chip-draft");
+  if (chip) chip.hidden = !showDraftChip();
+  const prov = $("stage").querySelector(".prov");
+  if (prov) {
+    prov.textContent = mode === "new" ? (showDraftChip() ? "Draft" : "Start from a blank score") : "Edited by you";
+  }
+  const node = $("stage").querySelector("[data-composer-node]");
+  if (node) {
+    node.textContent = composerDirty() ? String(recipe.steps.length + 1) : "+";
+    node.classList.toggle("live", composerDirty());
+  }
+}
+
+function unitDirty(key) {
+  if (key === "facts") return factsDirty();
+  if (key === "composer") return composerDirty();
+  if (key.startsWith("ing:")) return ingDirty(key.slice(4));
+  if (key.startsWith("step:")) return stepDirty(key.slice(5));
+  return false;
+}
+
+function acceptBtns(unit) {
+  return `<span class="accept">
+    <button type="button" class="tick" data-act="accept" data-unit="${unit}" aria-label="Save this change">✓</button>
+    <button type="button" class="cross" data-act="reject" data-unit="${unit}" aria-label="Discard this change">✕</button>
+  </span>`;
+}
+
+function mark() {
+  ui.dirty = true;
+}
+
+function ingById(id) {
+  return recipe.ingredients.find((row) => row.id === id);
+}
+
+function placement() {
+  const first = new Map();
+  for (const step of recipe.steps) {
+    for (const id of step.ings) if (!first.has(id)) first.set(id, step.id);
+  }
+  const unplaced = recipe.ingredients.filter((row) => !first.has(row.id));
+  const rows = recipe.steps.map((step) => ({
+    step,
+    arriving: recipe.ingredients.filter((row) => first.get(row.id) === step.id),
+  }));
+  return { rows, unplaced };
+}
+
+function markSrc(src) {
+  return src === "caption"
+    ? `<span class="fromcap">From caption</span>`
+    : `<span class="you">Added by you</span>`;
+}
+
+function ingRead(row) {
+  const main = `${row.qty ? esc(row.qty) + " " : ""}${esc(row.unit)} ${esc(row.name)}`.trim();
+  return `<b>${esc(main || "Untitled")}</b>${row.raw ? ` <span class="ing-raw">· ${esc(row.raw)}</span>` : ""}`;
+}
+
+function placeOnBtns(ingId) {
+  if (!recipe.steps.length) return `<p class="hint">Add a beat first, then place it.</p>`;
+  return `<div class="place-on"><span>Place on</span>${recipe.steps.map((step, index) =>
+    `<button type="button" data-act="place-on" data-ing="${ingId}" data-step="${step.id}" aria-label="Place on step ${index + 1}">${index + 1}</button>`
+  ).join("")}</div>`;
+}
+
+function ingLine(row, showGroup, confirm, placeable) {
+  const pending = confirm && ingDirty(row.id) ? " pending" : "";
+  const editing = ui.editingIng === row.id ? " editing" : "";
+  return `<li class="ing${pending}${editing}" data-ing="${row.id}"${confirm ? ` data-unit="ing:${row.id}"` : ""}>
+    ${showGroup && row.group ? `<span class="grp">${esc(row.group)}</span>` : ""}
+    <span class="ing-read" data-act="edit-ing" data-id="${row.id}">${ingRead(row)}</span>
+    <span class="ing-edit">
+      <input class="q" data-k="ings.${row.id}.qty" value="${esc(row.qty)}" aria-label="Quantity" enterkeyhint="done">
+      <input class="u" data-k="ings.${row.id}.unit" value="${esc(row.unit)}" aria-label="Unit" enterkeyhint="done">
+      <input class="n" data-k="ings.${row.id}.name" value="${esc(row.name)}" aria-label="Name" enterkeyhint="done">
+    </span>
+    ${markSrc(row.src)}
+    ${placeable ? placeOnBtns(row.id) : ""}
+    ${confirm ? acceptBtns(`ing:${row.id}`) : ""}
+  </li>`;
+}
+
+function arrivingList(arriving, stepId, confirm) {
+  if (!arriving.length) {
+    return `<button type="button" class="ghost-add" data-act="add-ing" data-step="${stepId}">+ ingredient for this beat</button>`;
+  }
+  let last = "";
+  return `<ul>${arriving.map((row) => {
+    const show = Boolean(row.group) && row.group !== last;
+    last = row.group;
+    return ingLine(row, show, confirm);
+  }).join("")}
+  <li><button type="button" class="ghost-add" data-act="add-ing" data-step="${stepId}">+ ingredient</button></li>
+  </ul>`;
+}
+
+function beatTools(index, id) {
+  return `<div class="tools">
+    <button type="button" class="iconish" data-act="move-step" data-id="${id}" data-dir="-1" ${index === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+    <button type="button" class="iconish" data-act="move-step" data-id="${id}" data-dir="1" ${index === recipe.steps.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+    <button type="button" class="iconish" data-act="add-step-after" data-id="${id}" aria-label="Add step below">+</button>
+    <button type="button" class="iconish" data-act="del-step" data-id="${id}" aria-label="Remove step">×</button>
+  </div>`;
+}
+
+function scoreHTML(opts = {}) {
+  const { rows, unplaced } = placement();
+  const composer = opts.composer !== false;
+  const confirm = Boolean(opts.confirm);
+  const steps = rows.map(({ step, arriving }, index) => `<li class="row" data-step="${step.id}">
+    <div class="col-ing">${arrivingList(arriving, step.id, confirm)}</div>
+    <div class="spine"><span class="node">${index + 1}</span></div>
+    <article class="beat${confirm && stepDirty(step.id) ? " pending" : ""}"${confirm ? ` data-unit="step:${step.id}"` : ""}>
+      ${beatTools(index, step.id)}
+      <div contenteditable="true" data-k="steps.${step.id}.text" data-ph="What happens in this beat?">${esc(step.text)}</div>
+      <div class="meta">
+        <input class="time" data-k="steps.${step.id}.duration" value="${esc(step.duration)}" placeholder="+ time" aria-label="Duration">
+        <input class="temp" data-k="steps.${step.id}.temp" value="${esc(step.temp)}" placeholder="+ temperature" aria-label="Temperature">
+        ${markSrc(step.src)}
+      </div>
+      ${confirm ? acceptBtns(`step:${step.id}`) : ""}
+    </article>
+  </li>`).join("");
+
+  const composerRow = composer ? `<li class="row composer">
+    <div class="col-ing"><button type="button" class="ghost-add" data-act="add-ing">+ unplaced ingredient</button></div>
+    <div class="spine"><span class="node${confirm && composerDirty() ? " live" : ""}" data-composer-node>${confirm && composerDirty() ? recipe.steps.length + 1 : "+"}</span></div>
+    <article class="beat${confirm && composerDirty() ? " pending" : ""}"${confirm ? ` data-unit="composer"` : ""}>
+      <div contenteditable="true" data-k="composer" data-ph="${recipe.steps.length ? "What happens next?" : "What happens first?"}">${esc(ui.composer)}</div>
+      ${confirm ? acceptBtns("composer") : `<div class="meta">
+        <button type="button" class="pill solid" data-act="commit">Add beat</button>
+        <span class="you">Return also pins it</span>
+      </div>`}
+    </article>
+  </li>` : "";
+
+  const leftover = unplaced.length ? `<section class="unplaced">
+    <h3>Not placed in a step</h3>
+    <p class="hint">Hang each one on a beat.</p>
+    <ul>${unplaced.map((row, i) => ingLine(row, Boolean(row.group) && row.group !== unplaced[i - 1]?.group, confirm, true)).join("")}</ul>
+  </section>` : "";
+
+  return `<div class="score">
+    <div class="h-ing"><h2>Ingredients</h2></div>
+    <div class="h-method"><h2>Method</h2></div>
+    <ol class="flow" aria-label="Recipe timeline">${steps}${composerRow}</ol>
+    ${leftover}
+  </div>`;
+}
+
+function chrome(opts = {}) {
+  const confirm = Boolean(opts.confirm);
+  const canSave = recipe.steps.some((s) => s.text.trim()) || recipe.ingredients.some((i) => i.name.trim());
+  const kicker = confirm
+    ? (mode === "new" ? "New recipe · tick each change to save" : "Editing · tick to save · click away does not write")
+    : (mode === "new" ? "New recipe · build the timeline" : "Editing · in place on the score");
+  const saveBtns = confirm ? "" : `<button type="button" class="pill solid" data-act="save" data-status="draft" ${canSave ? "" : "disabled"}>Save draft</button>
+      <button type="button" class="pill" data-act="save" data-status="reviewed" ${canSave ? "" : "disabled"}>Save as reviewed</button>`;
+  return `<header class="head">
+    <p class="kicker">${kicker}</p>
+    <div class="facts-unit${confirm && factsDirty() ? " pending" : ""}"${confirm ? ` data-unit="facts"` : ""}>
+      <div class="title-row">
+        <div contenteditable="true" data-k="title" data-ph="Name this recipe" role="heading" aria-level="1">${esc(recipe.title)}</div>
+        <span class="chip-draft" ${showDraftChip() ? "" : "hidden"}>Draft</span>
+      </div>
+      <p class="facts">
+        <span contenteditable="true" data-k="servings" data-ph="servings">${esc(recipe.servings)}</span>
+        <span class="dot">·</span>
+        <span contenteditable="true" data-k="calories" data-ph="calories">${esc(recipe.calories)}</span>
+        <span class="dot">·</span>
+        <span contenteditable="true" data-k="totalTime" data-ph="total time">${esc(recipe.totalTime)}</span>
+      </p>
+      ${confirm ? acceptBtns("facts") : ""}
+    </div>
+    <div class="actions">
+      ${saveBtns}
+      <button type="button" class="pill ghost">+ Tonight</button>
+      <button type="button" class="pill ghost">Open original ↗</button>
+    </div>
+    <p class="notice" role="status">${esc(ui.notice)}</p>
+  </header>
+  <p class="prov">${mode === "new" ? (showDraftChip() ? "Draft" : "Start from a blank score") : "Edited by you"}</p>`;
+}
+
+function viewA() {
+  return chrome({ confirm: true }) + scoreHTML({ confirm: true });
+}
+
+function view() {
+  return viewA();
+}
+
+function patch(key, value) {
+  if (key === "composer") { ui.composer = value; return; }
+  if (key === "composerDuration") { ui.composerDuration = value; return; }
+  if (key === "composerTemp") { ui.composerTemp = value; return; }
+  if (key === "title" || key === "servings" || key === "calories" || key === "totalTime") {
+    recipe[key] = value; mark(); return;
+  }
+  const parts = key.split(".");
+  if (parts[0] === "ings") {
+    const row = ingById(parts[1]);
+    if (row) { row[parts[2]] = value; row.src = "user"; mark(); }
+    return;
+  }
+  if (parts[0] === "steps") {
+    const step = recipe.steps.find((s) => s.id === parts[1]);
+    if (step) { step[parts[2]] = value; step.src = "user"; mark(); }
+  }
+}
+
+function commitComposer() {
+  const text = (ui.composer || "").trim();
+  if (!text) return;
+  recipe.steps.push({
+    id: uid("s"),
+    text,
+    duration: ui.composerDuration || "",
+    temp: ui.composerTemp || "",
+    ings: [],
+    src: "user",
+  });
+  ui.composer = "";
+  ui.composerDuration = "";
+  ui.composerTemp = "";
+  ui.focus = recipe.steps.length - 1;
+  mark();
+}
+
+function addIng(stepId) {
+  const row = { id: uid("i"), qty: "", unit: "", name: "", raw: "", group: "", src: "user" };
+  recipe.ingredients.push(row);
+  if (stepId) {
+    const step = recipe.steps.find((s) => s.id === stepId);
+    if (step) step.ings.push(row.id);
+  }
+  ui.editingIng = row.id;
+  pendingFocus = `[data-k="ings.${row.id}.name"]`;
+  mark();
+}
+
+function addStepAfter(id, blank) {
+  const at = recipe.steps.findIndex((s) => s.id === id);
+  const step = { id: uid("s"), text: blank || "", duration: "", temp: "", ings: [], src: "user" };
+  recipe.steps.splice(at < 0 ? recipe.steps.length : at + 1, 0, step);
+  ui.focus = Math.max(at + 1, 0);
+  pendingFocus = `[data-k="steps.${step.id}.text"]`;
+  mark();
+}
+
+function delStep(id) {
+  recipe.steps = recipe.steps.filter((s) => s.id !== id);
+  ui.focus = Math.min(ui.focus, Math.max(0, recipe.steps.length - 1));
+  mark();
+}
+
+function delIng(id) {
+  recipe.ingredients = recipe.ingredients.filter((r) => r.id !== id);
+  for (const step of recipe.steps) step.ings = step.ings.filter((x) => x !== id);
+  mark();
+}
+
+function moveStep(id, dir) {
+  const i = recipe.steps.findIndex((s) => s.id === id);
+  const j = i + Number(dir);
+  if (i < 0 || j < 0 || j >= recipe.steps.length) return;
+  const next = recipe.steps.slice();
+  next.splice(j, 0, ...next.splice(i, 1));
+  recipe.steps = next;
+  mark();
+}
+
+function acceptUnit(key) {
+  if (key === "composer") {
+    if (!composerDirty()) return;
+    commitComposer();
+    const last = recipe.steps[recipe.steps.length - 1];
+    if (last) {
+      const copy = { ...last, ings: last.ings.slice() };
+      saved.steps.push(copy);
+    }
+    ui.notice = "Saved this beat";
+    ui.dirty = factsDirty() || recipe.ingredients.some((row) => ingDirty(row.id)) || recipe.steps.some((step) => stepDirty(step.id));
+    return;
+  }
+  if (key === "facts") {
+    for (const field of ["title", "servings", "calories", "totalTime"]) saved[field] = recipe[field];
+    ui.notice = "Saved facts";
+  } else if (key.startsWith("ing:")) {
+    const id = key.slice(4);
+    const live = ingById(id);
+    if (!live) return;
+    const at = saved.ingredients.findIndex((row) => row.id === id);
+    if (at < 0) saved.ingredients.push({ ...live });
+    else saved.ingredients[at] = { ...live };
+    ui.editingIng = null;
+    ui.notice = `Saved ${live.name || "ingredient"}`;
+
+  } else if (key.startsWith("step:")) {
+    const id = key.slice(5);
+    const live = recipe.steps.find((step) => step.id === id);
+    if (!live) return;
+    const at = saved.steps.findIndex((step) => step.id === id);
+    const copy = { ...live, ings: live.ings.slice() };
+    if (at < 0) saved.steps.push(copy);
+    else saved.steps[at] = copy;
+    ui.notice = "Saved this beat";
+  }
+  ui.dirty = factsDirty() || recipe.ingredients.some((row) => ingDirty(row.id)) || recipe.steps.some((step) => stepDirty(step.id));
+}
+
+function rejectUnit(key) {
+  if (key === "composer") {
+    ui.composer = "";
+    ui.composerDuration = "";
+    ui.composerTemp = "";
+    ui.notice = "Discarded beat";
+    return;
+  }
+  if (key === "facts") {
+    for (const field of ["title", "servings", "calories", "totalTime"]) recipe[field] = saved[field];
+    ui.notice = "Reverted facts";
+    return;
+  }
+  if (key.startsWith("ing:")) {
+    const id = key.slice(4);
+    const db = saved.ingredients.find((row) => row.id === id);
+    ui.editingIng = null;
+    if (!db) {
+      delIng(id);
+      ui.notice = "Discarded ingredient";
+      return;
+    }
+    const at = recipe.ingredients.findIndex((row) => row.id === id);
+    if (at < 0) recipe.ingredients.push({ ...db });
+    else recipe.ingredients[at] = { ...db };
+    ui.notice = "Reverted ingredient";
+    return;
+  }
+  if (key.startsWith("step:")) {
+    const id = key.slice(5);
+    const db = saved.steps.find((step) => step.id === id);
+    if (!db) {
+      delStep(id);
+      ui.notice = "Discarded beat";
+      return;
+    }
+    const at = recipe.steps.findIndex((step) => step.id === id);
+    const copy = { ...db, ings: db.ings.slice() };
+    if (at < 0) recipe.steps.push(copy);
+    else recipe.steps[at] = copy;
+    ui.notice = "Reverted beat";
+  }
+}
+
+function onAct(btn) {
+  const act = btn.dataset.act;
+  if (act === "accept") { acceptUnit(btn.dataset.unit); render(); return; }
+  if (act === "reject") { rejectUnit(btn.dataset.unit); render(); return; }
+  if (act === "add-ing") { addIng(btn.dataset.step); render(); return; }
+  if (act === "edit-ing") {
+    ui.editingIng = btn.dataset.id;
+    pendingFocus = `[data-k="ings.${btn.dataset.id}.name"]`;
+    render();
+    return;
+  }
+  if (act === "add-step-after") { addStepAfter(btn.dataset.id); render(); return; }
+  if (act === "del-step") { delStep(btn.dataset.id); render(); return; }
+  if (act === "del-ing") { delIng(btn.dataset.id); render(); return; }
+  if (act === "move-step") { moveStep(btn.dataset.id, btn.dataset.dir); render(); return; }
+  if (act === "place-on") {
+    const step = recipe.steps.find((row) => row.id === btn.dataset.step);
+    if (step && !step.ings.includes(btn.dataset.ing)) {
+      step.ings.push(btn.dataset.ing);
+      mark();
+    }
+    render();
+  }
+}
+
+function dump() {
+  $("state").textContent = JSON.stringify({
+    mode,
+    dirty: ui.dirty,
+    title: recipe.title,
+    servings: recipe.servings,
+    ingredients: recipe.ingredients.map((r) => r.name || "(blank)"),
+    steps: recipe.steps.map((s) => ({ text: s.text.slice(0, 48), ings: s.ings.length, duration: s.duration })),
+    composer: ui.composer,
+    notice: ui.notice,
+    pending: {
+      facts: factsDirty(),
+      ingredients: recipe.ingredients.filter((row) => ingDirty(row.id)).map((row) => row.id),
+      steps: recipe.steps.filter((step) => stepDirty(step.id)).map((step) => step.id),
+    },
+    savedTitle: saved.title,
+  }, null, 2);
+}
+
+function renderSwitcher() {
+  $("switcher").innerHTML = `
+    <div class="lab">Pencil the score<small>prototype · not kitchen</small></div>
+    <div class="modes">
+      <button type="button" class="${mode === "existing" ? "on" : ""}" data-mode="existing">Existing</button>
+      <button type="button" class="${mode === "new" ? "on" : ""}" data-mode="new">New recipe</button>
+    </div>`;
+  $("switcher").querySelectorAll("[data-mode]").forEach((b) => {
+    b.onclick = () => setMode(b.dataset.mode);
+  });
+}
+
+function render() {
+  $("how").innerHTML = HOW;
+  $("stage").innerHTML = view();
+  if (pendingFocus) {
+    const sel = pendingFocus;
+    pendingFocus = null;
+    requestAnimationFrame(() => {
+      const node = $("stage").querySelector(sel);
+      if (!node) return;
+      node.focus();
+      if (node.matches("input") && !node.value) node.select();
+    });
+  }
+  renderSwitcher();
+  dump();
+}
+
+$("stage").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-act]");
+  if (btn && $("stage").contains(btn)) onAct(btn);
+});
+
+$("stage").addEventListener("mousedown", (e) => {
+  if (e.target.closest("[data-act='accept'], [data-act='reject'], [data-act='place-on'], [data-act='add-ing']")) e.preventDefault();
+});
+
+$("stage").addEventListener("input", (e) => {
+  const t = e.target;
+  if (!t.dataset?.k) return;
+  const value = t.matches("input, textarea") ? t.value : t.innerText.replace(/\n$/, "");
+  patch(t.dataset.k, value);
+  const unit = t.closest("[data-unit]");
+  if (unit) unit.classList.toggle("pending", unitDirty(unit.dataset.unit));
+  refreshDraftChrome();
+  dump();
+});
+
+$("stage").addEventListener("focusout", (e) => {
+  const unit = e.target.closest("[data-unit]");
+  if (!unit) return;
+  if (e.relatedTarget && unit.contains(e.relatedTarget)) return;
+  const dirty = unitDirty(unit.dataset.unit);
+  unit.classList.toggle("pending", dirty);
+  if (unit.dataset.unit.startsWith("ing:")) {
+    const id = unit.dataset.unit.slice(4);
+    const row = ingById(id);
+    const read = unit.querySelector(".ing-read");
+    if (row && read) read.innerHTML = ingRead(row);
+    if (ui.editingIng === id) {
+      ui.editingIng = null;
+      unit.classList.remove("editing");
+    }
+  }
+});
+
+$("stage").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey) return;
+  const t = e.target;
+  if (t.dataset?.k === "composer" && t.getAttribute("contenteditable")) {
+    e.preventDefault();
+    acceptUnit("composer");
+    render();
+    return;
+  }
+  const unit = t.closest("[data-unit]");
+  if (!unit || !unit.dataset.unit.startsWith("ing:")) return;
+  e.preventDefault();
+  if (unitDirty(unit.dataset.unit)) acceptUnit(unit.dataset.unit);
+  render();
+});
+
+readUrl();
+recipe = mode === "new" ? empty() : filled();
+saved = cloneRecipe(recipe);
+ui = freshUi();
+render();
+</script>
+</body>
+</html>

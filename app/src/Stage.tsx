@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type Collection, type ItemCard } from "./api.ts";
-import { canOpenInStage, neverFrame, youtubeVideoId } from "../../core/sanitize.ts";
+import { canOpenInStage, instagramEmbedUrl, neverFrame, youtubeVideoId } from "../../core/sanitize.ts";
 import { cardTitle, firstVisual, hostOf, who } from "./item-content.ts";
 import { sourceLabel } from "./source-icons.ts";
 import { canMountLiveFrame } from "./stage-navigation.ts";
@@ -42,22 +42,8 @@ function inspectFrame(el: HTMLIFrameElement): boolean {
   }
 }
 
-function instagramEmbed(url: string): string | null {
-  try {
-    const u = new URL(url);
-    const host = u.hostname.replace(/^www\./, "");
-    if (!/(^|\.)instagram\.com$/i.test(host)) return null;
-    const m = u.pathname.match(/\/(p|reel|tv)\/([^/?#]+)/i);
-    const kind = m?.[1];
-    const code = m?.[2];
-    return kind && code ? `https://www.instagram.com/${kind.toLowerCase()}/${code}/embed` : null;
-  } catch {
-    return null;
-  }
-}
-
 export function isEmbedUrl(url: string): boolean {
-  return Boolean(youtubeVideoId(url) || instagramEmbed(url));
+  return Boolean(youtubeVideoId(url) || instagramEmbedUrl(url));
 }
 
 export function frameDenied(url: string): boolean {
@@ -173,9 +159,9 @@ export function Stage({ item, startPage, onClose, onItemChange }: {
   if (!item) return null;
 
   const pageYt = page ? youtubeVideoId(page) : null;
-  const pageIg = page ? instagramEmbed(page) : null;
+  const pageIg = page ? instagramEmbedUrl(page) : null;
   const ytId = pageYt || (!page ? youtubeVideoId(item.url) : null);
-  const ig = pageIg || (!page ? instagramEmbed(item.url) : null);
+  const ig = pageIg || (!page ? instagramEmbedUrl(item.url) : null);
   const visual = firstVisual(item);
   const title = cardTitle(item);
   const body = (item.body || "").replace(/(https?:\/\/)\s+/g, "$1");

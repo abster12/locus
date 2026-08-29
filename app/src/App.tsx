@@ -11,7 +11,7 @@ import { SourcesPage } from "./SourcesPage.tsx";
 import { ItemList } from "./DeskPage.tsx";
 import { ReadingPage } from "./ReadingPage.tsx";
 import { AtlasPage } from "./AtlasPage.tsx";
-import { ShelvesPage } from "./ShelvesPage.tsx";
+import { KitchenPage, KitchenDetail } from "./KitchenPage.tsx";
 import { CollectionsPage } from "./CollectionsPage.tsx";
 import { SummaryPage } from "./SummaryPage.tsx";
 import { canMountLiveFrame, firstStageDestination } from "./stage-navigation.ts";
@@ -27,7 +27,8 @@ type Route =
   | { name: "sources" }
   | { name: "reading" }
   | { name: "atlas" }
-  | { name: "shelves" }
+  | { name: "kitchen" }
+  | { name: "kitchenItem"; id: string; mode: "auto" | "watch" | "edit" }
   | { name: "summary"; scope: "day" | "collection"; ref: string };
 
 function parseHash(): Route {
@@ -47,7 +48,19 @@ function parseHash(): Route {
   // so `#/reading/:id` renders the ordinary index and shell chrome.
   if (a === "reading") return { name: "reading" };
   if (a === "atlas") return { name: "atlas" };
-  if (a === "shelves") return { name: "shelves" };
+  if (a === "kitchen") {
+    if (b) {
+      const mode = parts[2] === "edit" ? "edit" : parts[2] === "watch" ? "watch" : "auto";
+      return { name: "kitchenItem", id: b, mode };
+    }
+    return { name: "kitchen" };
+  }
+  if (a === "shelves") {
+    // Shelves moved into the Desk rail. Replace in place so old links and
+    // restored hashes land on Desk without adding a history step.
+    history.replaceState(null, "", `${location.pathname}${location.search}#/recent`);
+    return { name: "recent", shelf };
+  }
   if (a === "summary" && parts[1] === "day") return { name: "summary", scope: "day", ref: parts[2] || today() };
   if (a === "summary" && parts[1] === "collection" && parts[2]) return { name: "summary", scope: "collection", ref: parts[2] };
   return { name: "recent", shelf };
@@ -310,14 +323,14 @@ export function App() {
             </span>
           ) : null}
         </Tab>
-        <Tab href="#/reading" active={route.name === "reading"}>
-          Reading
+        <Tab href="#/kitchen" active={route.name === "kitchen" || route.name === "kitchenItem"}>
+          Kitchen
         </Tab>
         <Tab href="#/atlas" active={route.name === "atlas"}>
           Atlas
         </Tab>
-        <Tab href="#/shelves" active={route.name === "shelves"}>
-          Shelves
+        <Tab href="#/reading" active={route.name === "reading"}>
+          Reading
         </Tab>
         <Tab href="#/sources" active={route.name === "sources"}>
           Sources
@@ -331,7 +344,8 @@ export function App() {
       {route.name === "sources" && <SourcesPage />}
       {route.name === "reading" && <ReadingPage />}
       {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
-      {route.name === "shelves" && <ShelvesPage />}
+      {route.name === "kitchen" && <KitchenPage />}
+      {route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}
       {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
       <Stage
         key={`${stageItem?.id ?? "closed"}:${stagePage ?? ""}`}

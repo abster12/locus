@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kitchen recipe score — five layout options</title>
+  <style>
+    :root {
+      --paper: #f3f0e8;
+      --card: #fffdf7;
+      --ink: #211f1a;
+      --muted: #716c61;
+      --rule: #d7d0c1;
+      --food: #3d6d52;
+      --food-soft: #e4eee5;
+      --heat: #a4482e;
+      --heat-soft: #f4e5dc;
+      --gold: #b4832d;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --body: "Avenir Next", Avenir, "Gill Sans", sans-serif;
+      --mono: "SFMono-Regular", Consolas, monospace;
+      --radius: 14px;
+      --shadow: 0 18px 50px rgba(54, 45, 31, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(51, 46, 36, .025) 1px, transparent 1px),
+        var(--paper);
+      background-size: 100% 26px;
+      font-family: var(--body);
+    }
+    button { font: inherit; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 3px solid color-mix(in srgb, var(--gold) 65%, white); outline-offset: 3px; }
+
+    .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 80px; }
+    .eyebrow { margin: 0 0 8px; color: var(--food); font: 700 11px/1 var(--mono); letter-spacing: .13em; text-transform: uppercase; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 850px; margin-bottom: 10px; font: 500 clamp(34px, 5vw, 64px)/.98 var(--display); letter-spacing: -.035em; }
+    .lede { max-width: 720px; margin-bottom: 28px; color: var(--muted); font-size: 15px; line-height: 1.6; }
+
+    .option-nav {
+      position: sticky;
+      z-index: 20;
+      top: 12px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      padding: 7px;
+      margin-bottom: 24px;
+      border: 1px solid var(--rule);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--card) 92%, transparent);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+    .option-nav button {
+      min-height: 48px;
+      padding: 8px 10px;
+      border: 0;
+      border-radius: 10px;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .option-nav button span { display: block; margin-bottom: 3px; font: 700 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .option-nav button[aria-selected="true"] { color: #fff; background: var(--ink); }
+
+    .option { display: none; }
+    .option.active { display: block; animation: reveal .28s ease both; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(5px); } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; } }
+
+    .option-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 420px);
+      gap: 24px;
+      align-items: end;
+      margin: 0 2px 14px;
+    }
+    .option-intro h2 { margin-bottom: 4px; font: 500 28px/1.1 var(--display); }
+    .option-intro p { margin-bottom: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .verdict { text-align: right; }
+    .verdict strong { color: var(--food); }
+
+    .recipe {
+      overflow: hidden;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .recipe-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      padding: 26px 28px 22px;
+      border-bottom: 1px solid var(--ink);
+    }
+    .recipe-head h3 { margin: 0 0 5px; font: 500 clamp(27px, 4vw, 42px)/1 var(--display); letter-spacing: -.025em; }
+    .recipe-head p { margin: 0; color: var(--muted); font-size: 13px; }
+    .facts { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .fact { padding: 6px 9px; border: 1px solid var(--rule); border-radius: 99px; font: 650 10px/1 var(--mono); text-transform: uppercase; }
+    .prep { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--rule); }
+    .prep span { padding: 10px 16px; text-align: center; font-size: 12px; font-weight: 650; }
+    .prep span + span { border-left: 1px solid var(--rule); }
+
+    .step-number {
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      flex: 0 0 32px;
+      border: 1px solid var(--food);
+      border-radius: 50%;
+      color: var(--food);
+      background: var(--card);
+      font: 700 11px/1 var(--mono);
+    }
+    .step-copy { min-width: 0; }
+    .step-copy strong { display: block; margin-bottom: 3px; font-family: var(--display); font-size: 17px; font-weight: 600; }
+    .step-copy p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .meta { display: inline-flex; gap: 5px; margin-top: 7px; }
+    .meta span { padding: 3px 6px; border-radius: 4px; color: var(--heat); background: var(--heat-soft); font: 700 9px/1 var(--mono); text-transform: uppercase; }
+    .ings { margin: 0; padding: 0; list-style: none; }
+    .ings li { font-size: 12.5px; line-height: 1.35; }
+    .ings b { color: var(--food); font-family: var(--mono); font-size: 10.5px; }
+
+    /* 01 — converging rail */
+    .rail-labels, .rail-row { display: grid; grid-template-columns: minmax(215px, 30%) 66px 42px minmax(0, 1fr); }
+    .rail-labels { border-bottom: 1px solid var(--rule); }
+    .rail-labels span { padding: 9px 14px; color: var(--muted); font: 700 9px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .rail-labels span:last-child { grid-column: 3 / 5; }
+    .rail-row { min-height: 104px; border-bottom: 1px solid var(--rule); }
+    .rail-row:last-child { border-bottom: 0; }
+    .rail-row > * { align-self: center; }
+    .rail-row .ings { padding: 13px 18px; }
+    .rail-row .ings li { padding: 4px 0; border-bottom: 1px dotted color-mix(in srgb, var(--rule) 75%, transparent); }
+    .rail-row .ings li:last-child { border: 0; }
+    .converge { position: relative; align-self: stretch; min-height: 70px; }
+    .converge::before { content: ""; position: absolute; top: 20%; bottom: 20%; left: 16px; border-left: 1.5px solid var(--food); }
+    .converge::after { content: ""; position: absolute; top: 50%; left: 16px; right: 0; border-top: 1.5px solid var(--food); transform: translateY(-50%); }
+    .rail-row.single .converge::before, .rail-row.empty .converge::before { display: none; }
+    .rail-row.empty .converge::after { border-top-style: dashed; opacity: .35; }
+    .rail-node { position: relative; display: grid; place-items: center; height: 100%; }
+    .rail-node::before { content: ""; position: absolute; left: -8px; right: 0; top: 50%; border-top: 1.5px solid var(--food); z-index: 0; }
+    .rail-node .step-number { position: relative; z-index: 1; }
+    .rail-method { padding: 16px 20px; }
+
+    /* 02 — operation junction */
+    .junction-list { padding: 12px 0; }
+    .junction-row { display: grid; grid-template-columns: minmax(210px, 30%) 116px minmax(0, 1fr); min-height: 112px; align-items: center; }
+    .junction-row + .junction-row { border-top: 1px solid var(--rule); }
+    .junction-row .ings { padding: 14px 18px; text-align: right; }
+    .junction-row .ings li { margin: 4px 0; }
+    .junction-node { position: relative; display: grid; place-items: center; align-self: stretch; }
+    .junction-node::before, .junction-node::after { content: ""; position: absolute; top: 50%; border-top: 1.5px solid var(--food); }
+    .junction-node::before { left: 0; right: 50%; }
+    .junction-node::after { left: 50%; right: 0; }
+    .op-pill { position: relative; z-index: 1; display: grid; place-items: center; min-width: 80px; min-height: 44px; padding: 6px 12px; border: 1px solid var(--food); border-radius: 999px; background: var(--food-soft); }
+    .op-pill b { font: 700 9px/1 var(--mono); letter-spacing: .08em; }
+    .op-pill span { margin-top: 4px; color: var(--food); font: 750 11px/1 var(--body); text-transform: uppercase; }
+    .junction-method { padding: 16px 22px; }
+
+    /* 03 — nested score matrix */
+    .matrix-wrap { overflow-x: auto; padding: 18px; }
+    .matrix {
+      display: grid;
+      grid-template-columns: minmax(245px, 1.75fr) repeat(5, minmax(92px, .72fr));
+      grid-template-rows: repeat(9, minmax(48px, auto));
+      min-width: 880px;
+      border: 1px solid var(--food);
+      background: var(--food);
+      gap: 1px;
+    }
+    .matrix-ing, .matrix-op { display: grid; align-items: center; background: var(--card); }
+    .matrix-ing { grid-column: 1; padding: 9px 12px; font-size: 12.5px; }
+    .matrix-ing b { margin-right: 7px; color: var(--food); font-family: var(--mono); font-size: 10px; }
+    .matrix-op { justify-items: center; padding: 8px; text-align: center; color: var(--food); }
+    .matrix-op b { display: block; font: 750 11px/1.2 var(--body); text-transform: uppercase; }
+    .matrix-op small { display: block; margin-top: 4px; color: var(--muted); font: 9px/1.3 var(--mono); }
+    .matrix-op::after { content: "→"; margin-top: 7px; color: var(--gold); font-family: var(--mono); }
+    .matrix-op:last-child::after { content: "✓"; color: var(--food); }
+    .matrix-note { margin: 0; padding: 0 18px 18px; color: var(--muted); font-size: 11px; }
+
+    /* 04 — vertical timeline */
+    .timeline { max-width: 850px; margin: 0 auto; padding: 26px 28px 30px; }
+    .timeline-row { display: grid; grid-template-columns: minmax(170px, 32%) 52px minmax(0, 1fr); min-height: 124px; }
+    .timeline-ings { align-self: center; padding-right: 20px; text-align: right; }
+    .timeline-ings li { margin: 4px 0; }
+    .timeline-spine { position: relative; display: grid; place-items: center; align-self: stretch; }
+    .timeline-spine::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; border-left: 1.5px solid var(--food); }
+    .timeline-row:first-child .timeline-spine::before { top: 50%; }
+    .timeline-row:last-child .timeline-spine::before { bottom: 50%; }
+    .timeline-spine .step-number { position: relative; z-index: 1; box-shadow: 0 0 0 6px var(--card); }
+    .meta .time-box { color: #fff; background: var(--heat); }
+    .timeline-method { align-self: center; padding-left: 20px; }
+
+    /* 05 — horizontal pipeline */
+    .pipeline-wrap { overflow-x: auto; padding: 22px; }
+    .pipeline { display: grid; grid-template-columns: repeat(5, minmax(190px, 1fr)); min-width: 970px; }
+    .phase { display: grid; grid-template-rows: 142px 56px minmax(126px, auto); min-width: 0; }
+    .phase-ings { display: grid; align-content: end; padding: 10px 14px 16px; border-bottom: 1px solid var(--rule); text-align: center; }
+    .phase-ings li { margin: 2px 0; }
+    .phase-track { position: relative; display: grid; place-items: center; }
+    .phase-track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 2px solid var(--food); }
+    .phase:first-child .phase-track::before { left: 50%; }
+    .phase:last-child .phase-track::before { right: 50%; }
+    .phase-track .step-number { position: relative; z-index: 1; background: var(--food); color: #fff; }
+    .phase-copy { padding: 14px 16px; text-align: center; border-right: 1px solid var(--rule); }
+    .phase:last-child .phase-copy { border-right: 0; }
+
+    .audit-note { margin: 18px 2px 0; color: var(--muted); font-size: 12px; }
+    .audit-note b { color: var(--ink); }
+
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 20px, 1180px); padding-top: 24px; }
+      .option-nav { position: static; grid-template-columns: 1fr; }
+      .option-nav button { display: flex; align-items: center; gap: 8px; min-height: 38px; text-align: left; }
+      .option-nav button span { margin: 0; }
+      .option-intro, .recipe-head { grid-template-columns: 1fr; }
+      .verdict { text-align: left; }
+      .facts { justify-content: flex-start; }
+      .prep { grid-template-columns: 1fr; }
+      .prep span + span { border-left: 0; border-top: 1px solid var(--rule); }
+      .rail-labels { display: none; }
+      .rail-row { grid-template-columns: 1fr 42px; padding: 16px; }
+      .rail-row .ings { grid-column: 1 / -1; padding: 0 0 12px; }
+      .converge { display: none; }
+      .rail-node { grid-column: 1; grid-row: 2; justify-content: start; height: auto; }
+      .rail-node::before { display: none; }
+      .rail-method { grid-column: 2 / 3; grid-row: 2; padding: 0; }
+      .rail-method { grid-column: 2 / -1; }
+      .junction-row { grid-template-columns: 82px minmax(0, 1fr); padding: 14px; }
+      .junction-row .ings { grid-column: 1 / -1; padding: 0 0 10px; text-align: left; }
+      .junction-node { align-self: center; min-height: 48px; }
+      .junction-node::before, .junction-node::after { display: none; }
+      .junction-method { padding: 0 0 0 12px; }
+      .timeline { padding: 20px 14px; }
+      .timeline-row { grid-template-columns: 44px minmax(0, 1fr); }
+      .timeline-ings { grid-column: 2; padding: 12px 0 2px; text-align: left; }
+      .timeline-spine { grid-column: 1; grid-row: 1 / 3; }
+      .timeline-method { grid-column: 2; padding: 4px 0 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <p class="eyebrow">Kitchen · recipe score study</p>
+    <h1>One complete recipe, five ways to read it.</h1>
+    <p class="lede">Every option uses exactly the same ingredients and actions. Switch views to judge alignment, scan speed, ingredient-to-step relationships, and whether the format still feels like Locus.</p>
+
+    <nav class="option-nav" role="tablist" aria-label="Recipe score layout options">
+      <button id="tab-1" role="tab" aria-selected="false" aria-controls="option-1" tabindex="-1"><span>01</span>Converging rail</button>
+      <button id="tab-2" role="tab" aria-selected="false" aria-controls="option-2" tabindex="-1"><span>02</span>Operation junction</button>
+      <button id="tab-3" role="tab" aria-selected="false" aria-controls="option-3" tabindex="-1"><span>03</span>Nested score</button>
+      <button id="tab-4" role="tab" aria-selected="true" aria-controls="option-4"><span>04</span>Timeline</button>
+      <button id="tab-5" role="tab" aria-selected="false" aria-controls="option-5" tabindex="-1"><span>05</span>Pipeline</button>
+    </nav>
+
+    <section class="option" id="option-1" role="tabpanel" aria-labelledby="tab-1" hidden>
+      <div class="option-intro">
+        <div><h2>Converging rail</h2><p>Ingredient groups collapse into one centred numbered action. Inspired by ReUI Timeline connectors, adapted for many-to-one cooking relationships.</p></div>
+        <p class="verdict"><strong>Best balance:</strong> readable, distinctive, and compatible with the current data.</p>
+      </div>
+      <article class="recipe">
+        <header class="recipe-head"><div><h3>Espresso Brownies</h3><p>Dense cocoa brownies sharpened with freshly brewed espresso.</p></div><div class="facts"><span class="fact">8×8-in pan</span><span class="fact">9 servings</span><span class="fact">45–55 min</span></div></header>
+        <div class="prep"><span>Butter and flour the pan</span><span>Preheat oven to 350°F / 170°C</span></div>
+        <div class="rail-labels"><span>Ingredients entering</span><span>Action</span></div>
+        <div class="rail-row single"><ul class="ings"><li><b>4 oz · 115 g</b> unsalted butter</li></ul><span class="converge"></span><span class="rail-node"><span class="step-number">1</span></span><div class="rail-method step-copy"><strong>Melt the butter</strong><p>Melt gently, then take it off the heat.</p></div></div>
+        <div class="rail-row"><ul class="ings"><li><b>1 cup · 200 g</b> sugar</li><li><b>¼ tsp</b> vanilla extract</li><li><b>1 shot · 60 ml</b> strong coffee</li></ul><span class="converge"></span><span class="rail-node"><span class="step-number">2</span></span><div class="rail-method step-copy"><strong>Build the wet mixture</strong><p>Stir sugar, vanilla, and espresso into the melted butter.</p></div></div>
+        <div class="rail-row single"><ul class="ings"><li><b>2 large · 100 g</b> eggs</li></ul><span class="converge"></span><span class="rail-node"><span class="step-number">3</span></span><div class="rail-method step-copy"><strong>Mix in the eggs</strong><p>Add the eggs and mix until the batter looks smooth and glossy.</p></div></div>
+        <div class="rail-row"><ul class="ings"><li><b>½ cup · 80 g</b> all-purpose flour</li><li><b>⅓ cup · 80 g</b> cocoa powder</li><li><b>¼ tsp · 1.3 g</b> baking soda</li><li><b>¼ tsp · 1.5 g</b> table salt</li></ul><span class="converge"></span><span class="rail-node"><span class="step-number">4</span></span><div class="rail-method step-copy"><strong>Fold in the dry ingredients</strong><p>Fold just until no dry streaks remain; avoid overmixing.</p></div></div>
+        <div class="rail-row empty"><ul class="ings"><li><b>Prepared batter</b></li></ul><span class="converge"></span><span class="rail-node"><span class="step-number">5</span></span><div class="rail-method step-copy"><strong>Bake until just set</strong><p>Spread into the pan and bake until the centre is set with moist crumbs.</p><span class="meta"><span>350°F · 170°C</span><span>30–40 min</span></span></div></div>
+      </article>
+      <p class="audit-note"><b>Audit:</b> Do your eyes understand that several ingredients converge into one action without needing a legend?</p>
+    </section>
+
+    <section class="option" id="option-2" role="tabpanel" aria-labelledby="tab-2" hidden>
+      <div class="option-intro">
+        <div><h2>Operation junction</h2><p>A ReUI Stepper-like indicator becomes a labelled operation capsule: MELT, MIX, FOLD, BAKE.</p></div>
+        <p class="verdict"><strong>Most explicit:</strong> excellent once AI or WebMCP supplies a reliable action label.</p>
+      </div>
+      <article class="recipe">
+        <header class="recipe-head"><div><h3>Espresso Brownies</h3><p>Dense cocoa brownies sharpened with freshly brewed espresso.</p></div><div class="facts"><span class="fact">8×8-in pan</span><span class="fact">9 servings</span><span class="fact">45–55 min</span></div></header>
+        <div class="prep"><span>Butter and flour the pan</span><span>Preheat oven to 350°F / 170°C</span></div>
+        <div class="junction-list">
+          <div class="junction-row"><ul class="ings"><li><b>4 oz · 115 g</b> unsalted butter</li></ul><div class="junction-node"><span class="op-pill"><b>01</b><span>Melt</span></span></div><div class="junction-method step-copy"><strong>Melt the butter</strong><p>Melt gently, then take it off the heat.</p></div></div>
+          <div class="junction-row"><ul class="ings"><li><b>1 cup · 200 g</b> sugar</li><li><b>¼ tsp</b> vanilla extract</li><li><b>1 shot · 60 ml</b> strong coffee</li></ul><div class="junction-node"><span class="op-pill"><b>02</b><span>Mix</span></span></div><div class="junction-method step-copy"><strong>Build the wet mixture</strong><p>Stir sugar, vanilla, and espresso into the melted butter.</p></div></div>
+          <div class="junction-row"><ul class="ings"><li><b>2 large · 100 g</b> eggs</li></ul><div class="junction-node"><span class="op-pill"><b>03</b><span>Mix</span></span></div><div class="junction-method step-copy"><strong>Mix in the eggs</strong><p>Add the eggs and mix until smooth and glossy.</p></div></div>
+          <div class="junction-row"><ul class="ings"><li><b>½ cup · 80 g</b> all-purpose flour</li><li><b>⅓ cup · 80 g</b> cocoa powder</li><li><b>¼ tsp · 1.3 g</b> baking soda</li><li><b>¼ tsp · 1.5 g</b> table salt</li></ul><div class="junction-node"><span class="op-pill"><b>04</b><span>Fold</span></span></div><div class="junction-method step-copy"><strong>Fold in the dry ingredients</strong><p>Fold just until no dry streaks remain; avoid overmixing.</p></div></div>
+          <div class="junction-row"><ul class="ings"><li><b>Prepared batter</b></li></ul><div class="junction-node"><span class="op-pill"><b>05</b><span>Bake</span></span></div><div class="junction-method step-copy"><strong>Bake until just set</strong><p>Spread into the pan and bake until the centre gives moist crumbs.</p><span class="meta"><span>350°F · 170°C</span><span>30–40 min</span></span></div></div>
+        </div>
+      </article>
+      <p class="audit-note"><b>Audit:</b> Are operation words more useful than numbered circles, or do they add too much visual weight?</p>
+    </section>
+
+    <section class="option" id="option-3" role="tabpanel" aria-labelledby="tab-3" hidden>
+      <div class="option-intro">
+        <div><h2>Nested recipe score</h2><p>The original reference rebuilt as a strict CSS Grid: ingredient rows feed progressively larger centred operation cells.</p></div>
+        <p class="verdict"><strong>Most innovative:</strong> the clearest expression of ingredients becoming a finished dish.</p>
+      </div>
+      <article class="recipe">
+        <header class="recipe-head"><div><h3>Espresso Brownies</h3><p>Dense cocoa brownies sharpened with freshly brewed espresso.</p></div><div class="facts"><span class="fact">8×8-in pan</span><span class="fact">9 servings</span><span class="fact">45–55 min</span></div></header>
+        <div class="prep"><span>Butter and flour the pan</span><span>Preheat oven to 350°F / 170°C</span></div>
+        <div class="matrix-wrap">
+          <div class="matrix" aria-label="Ingredients nested into successive cooking operations">
+            <div class="matrix-ing" style="grid-row:1"><span><b>4 oz · 115 g</b> unsalted butter</span></div>
+            <div class="matrix-ing" style="grid-row:2"><span><b>1 cup · 200 g</b> sugar</span></div>
+            <div class="matrix-ing" style="grid-row:3"><span><b>¼ tsp</b> vanilla extract</span></div>
+            <div class="matrix-ing" style="grid-row:4"><span><b>1 shot · 60 ml</b> strong coffee</span></div>
+            <div class="matrix-ing" style="grid-row:5"><span><b>2 large · 100 g</b> eggs</span></div>
+            <div class="matrix-ing" style="grid-row:6"><span><b>½ cup · 80 g</b> all-purpose flour</span></div>
+            <div class="matrix-ing" style="grid-row:7"><span><b>⅓ cup · 80 g</b> cocoa powder</span></div>
+            <div class="matrix-ing" style="grid-row:8"><span><b>¼ tsp · 1.3 g</b> baking soda</span></div>
+            <div class="matrix-ing" style="grid-row:9"><span><b>¼ tsp · 1.5 g</b> table salt</span></div>
+            <div class="matrix-op" style="grid-column:2;grid-row:1"><span><b>1 · Melt</b><small>butter</small></span></div>
+            <div class="matrix-op" style="grid-column:3;grid-row:1 / 5"><span><b>2 · Mix</b><small>sugar · vanilla · espresso</small></span></div>
+            <div class="matrix-op" style="grid-column:4;grid-row:1 / 6"><span><b>3 · Mix</b><small>add eggs until glossy</small></span></div>
+            <div class="matrix-op" style="grid-column:5;grid-row:1 / 10"><span><b>4 · Fold</b><small>flour · cocoa · soda · salt</small></span></div>
+            <div class="matrix-op" style="grid-column:6;grid-row:1 / 10"><span><b>5 · Bake</b><small>350°F / 170°C<br>30–40 min</small></span></div>
+          </div>
+        </div>
+        <p class="matrix-note">Read left to right: each taller cell contains the result of every operation before it.</p>
+      </article>
+      <p class="audit-note"><b>Audit:</b> Does the nesting communicate the recipe faster than prose, and is horizontal scrolling acceptable on a phone?</p>
+    </section>
+
+    <section class="option active" id="option-4" role="tabpanel" aria-labelledby="tab-4">
+      <div class="option-intro">
+        <div><h2>Vertical cooking timeline</h2><p>Numbered nodes keep the sequence stable. When a step includes timing, it appears as an unmistakable red box beside its other cooking conditions.</p></div>
+        <p class="verdict"><strong>Clear hierarchy:</strong> sequence stays on the spine; timing remains useful metadata.</p>
+      </div>
+      <article class="recipe">
+        <header class="recipe-head"><div><h3>Espresso Brownies</h3><p>Dense cocoa brownies sharpened with freshly brewed espresso.</p></div><div class="facts"><span class="fact">8×8-in pan</span><span class="fact">9 servings</span><span class="fact">45–55 min</span></div></header>
+        <div class="prep"><span>Butter and flour the pan</span><span>Preheat oven to 350°F / 170°C</span></div>
+        <div class="timeline">
+          <div class="timeline-row"><ul class="ings timeline-ings"><li><b>4 oz · 115 g</b> unsalted butter</li></ul><div class="timeline-spine"><span class="step-number" aria-label="Step 1; duration not provided">1</span></div><div class="timeline-method step-copy"><strong>Melt the butter</strong><p>Melt gently, then take it off the heat.</p></div></div>
+          <div class="timeline-row"><ul class="ings timeline-ings"><li><b>1 cup · 200 g</b> sugar</li><li><b>¼ tsp</b> vanilla extract</li><li><b>1 shot · 60 ml</b> strong coffee</li></ul><div class="timeline-spine"><span class="step-number" aria-label="Step 2; duration not provided">2</span></div><div class="timeline-method step-copy"><strong>Build the wet mixture</strong><p>Stir sugar, vanilla, and espresso into the melted butter.</p></div></div>
+          <div class="timeline-row"><ul class="ings timeline-ings"><li><b>2 large · 100 g</b> eggs</li></ul><div class="timeline-spine"><span class="step-number" aria-label="Step 3; duration not provided">3</span></div><div class="timeline-method step-copy"><strong>Mix in the eggs</strong><p>Add the eggs and mix until smooth and glossy.</p></div></div>
+          <div class="timeline-row"><ul class="ings timeline-ings"><li><b>½ cup · 80 g</b> all-purpose flour</li><li><b>⅓ cup · 80 g</b> cocoa powder</li><li><b>¼ tsp · 1.3 g</b> baking soda</li><li><b>¼ tsp · 1.5 g</b> table salt</li></ul><div class="timeline-spine"><span class="step-number" aria-label="Step 4; duration not provided">4</span></div><div class="timeline-method step-copy"><strong>Fold in the dry ingredients</strong><p>Fold just until no dry streaks remain; avoid overmixing.</p></div></div>
+          <div class="timeline-row"><ul class="ings timeline-ings"><li><b>Prepared batter</b></li></ul><div class="timeline-spine"><span class="step-number" aria-label="Step 5">5</span></div><div class="timeline-method step-copy"><strong>Bake until just set</strong><p>Spread into the pan and bake until the centre gives moist crumbs.</p><span class="meta"><span>350°F · 170°C</span><span class="time-box">30–40 min</span></span></div></div>
+        </div>
+      </article>
+      <p class="audit-note"><b>Audit:</b> Does the red duration box stand out at the right moment without competing with the numbered cooking sequence?</p>
+    </section>
+
+    <section class="option" id="option-5" role="tabpanel" aria-labelledby="tab-5" hidden>
+      <div class="option-intro">
+        <div><h2>Horizontal cooking pipeline</h2><p>ReUI’s horizontal Stepper and Gantt rhythm recast as a five-stage preparation line.</p></div>
+        <p class="verdict"><strong>Best overview:</strong> cinematic and very clear on desktop; deliberately scrollable on narrow screens.</p>
+      </div>
+      <article class="recipe">
+        <header class="recipe-head"><div><h3>Espresso Brownies</h3><p>Dense cocoa brownies sharpened with freshly brewed espresso.</p></div><div class="facts"><span class="fact">8×8-in pan</span><span class="fact">9 servings</span><span class="fact">45–55 min</span></div></header>
+        <div class="prep"><span>Butter and flour the pan</span><span>Preheat oven to 350°F / 170°C</span></div>
+        <div class="pipeline-wrap">
+          <div class="pipeline">
+            <section class="phase"><ul class="ings phase-ings"><li><b>4 oz · 115 g</b></li><li>unsalted butter</li></ul><div class="phase-track"><span class="step-number">1</span></div><div class="phase-copy step-copy"><strong>Melt</strong><p>Melt gently, then remove from the heat.</p></div></section>
+            <section class="phase"><ul class="ings phase-ings"><li><b>1 cup · 200 g</b> sugar</li><li><b>¼ tsp</b> vanilla</li><li><b>1 shot · 60 ml</b> coffee</li></ul><div class="phase-track"><span class="step-number">2</span></div><div class="phase-copy step-copy"><strong>Mix the wet base</strong><p>Stir everything into the melted butter.</p></div></section>
+            <section class="phase"><ul class="ings phase-ings"><li><b>2 large · 100 g</b></li><li>eggs</li></ul><div class="phase-track"><span class="step-number">3</span></div><div class="phase-copy step-copy"><strong>Make it glossy</strong><p>Mix in the eggs until smooth.</p></div></section>
+            <section class="phase"><ul class="ings phase-ings"><li><b>½ cup · 80 g</b> flour</li><li><b>⅓ cup · 80 g</b> cocoa</li><li><b>¼ tsp</b> soda</li><li><b>¼ tsp</b> salt</li></ul><div class="phase-track"><span class="step-number">4</span></div><div class="phase-copy step-copy"><strong>Fold</strong><p>Stop when no dry streaks remain.</p></div></section>
+            <section class="phase"><ul class="ings phase-ings"><li><b>Prepared batter</b></li><li>in the prepared pan</li></ul><div class="phase-track"><span class="step-number">5</span></div><div class="phase-copy step-copy"><strong>Bake</strong><p>Until just set with moist crumbs.</p><span class="meta"><span>350°F</span><span>30–40 min</span></span></div></section>
+          </div>
+        </div>
+      </article>
+      <p class="audit-note"><b>Audit:</b> Does seeing the whole journey at once justify horizontal scrolling?</p>
+    </section>
+  </main>
+
+  <script>
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+
+    function selectTab(next) {
+      tabs.forEach((tab) => {
+        const selected = tab === next;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      panels.forEach((panel) => {
+        const selected = panel.id === next.getAttribute('aria-controls');
+        panel.hidden = !selected;
+        panel.classList.toggle('active', selected);
+      });
+      next.focus({ preventScroll: true });
+    }
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => selectTab(tab));
+      tab.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const target = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? tabs.length - 1
+            : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        selectTab(tabs[target]);
+      });
+    });
+  </script>
+</body>
+</html>

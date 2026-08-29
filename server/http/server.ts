@@ -67,6 +67,20 @@ import {
   writeLibraryArchive,
 } from "../library-archive.ts";
 import {
+  KitchenConflict,
+  addTonight,
+  clearTonight,
+  getKitchenIndex,
+  getKitchenItem,
+  getTonight,
+  putRecipeDocument,
+  removeRecipeDocument,
+  removeTonight,
+  reorderTonight,
+  type RecipeWriteInput,
+} from "../kitchen/module.ts";
+import { kitchenAiStatus, makeCookable } from "../kitchen/ai.ts";
+import {
   allowedHost,
   allowedOrigin,
   csrfToken,
@@ -250,6 +264,82 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
 
   on("POST", "/api/reading/undo-remove", async (_req, res, _url, body) => {
     json(res, 200, { document: undoRemoveReadingDocument(db, LOCAL_LIBRARY_ID, String(asRec(body).token ?? "")) });
+  });
+
+  // Kitchen. Library id is always "local"; clients never submit library_id and
+  // never choose the actor — the human session is always actor "user".
+  on("GET", "/api/kitchen", async (_req, res, url) => {
+    const limitRaw = url.searchParams.get("limit");
+    const limit = limitRaw ? Number(limitRaw) : undefined;
+    json(res, 200, getKitchenIndex(db, LOCAL_LIBRARY_ID, {
+      q: url.searchParams.get("q") ?? undefined,
+      source: url.searchParams.get("source") ?? undefined,
+      cursor: url.searchParams.get("cursor") ?? undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+    }));
+  });
+
+  on("GET", "/api/kitchen/items/:id", async (_req, res, _url, _body, params) => {
+    const item = getKitchenItem(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!item) return json(res, 404, { error: "item not found" });
+    json(res, 200, item);
+  });
+
+  on("GET", "/api/kitchen/ai", async (_req, res) => {
+    json(res, 200, kitchenAiStatus());
+  });
+
+  on("POST", "/api/kitchen/items/:id/make-cookable", async (_req, res, _url, body, params) => {
+    const allowGenerate = asRec(body).allowGenerate;
+    if (typeof allowGenerate !== "boolean") throw new RejectedPayload("allowGenerate must be boolean");
+    try {
+      json(res, 200, await makeCookable(db, LOCAL_LIBRARY_ID, params.id ?? "", allowGenerate, nowIso()));
+    } catch (error) {
+      if (error instanceof RejectedPayload || error instanceof KitchenConflict || error instanceof MissingResource) throw error;
+      json(res, kitchenAiStatus().available ? 502 : 503, { error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  on("POST", "/api/kitchen/items/:id/recipe", async (_req, res, _url, body, params) => {
+    const rec = asRec(body);
+    const input = {
+      expectedSourceRevision: typeof rec.expectedSourceRevision === "string" ? rec.expectedSourceRevision : "",
+      status: rec.status,
+      draft: rec.draft,
+    } as RecipeWriteInput;
+    const document = putRecipeDocument(db, LOCAL_LIBRARY_ID, params.id ?? "", input, "user", nowIso());
+    json(res, 200, { document });
+  });
+
+  on("POST", "/api/kitchen/items/:id/recipe/remove", async (_req, res, _url, _body, params) => {
+    const removed = removeRecipeDocument(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!removed) return json(res, 404, { error: "recipe not found" });
+    json(res, 200, { removed });
+  });
+
+  on("GET", "/api/kitchen/tonight", async (_req, res) => {
+    json(res, 200, getTonight(db, LOCAL_LIBRARY_ID));
+  });
+
+  on("POST", "/api/kitchen/tonight", async (_req, res, _url, body) => {
+    const entry = addTonight(db, LOCAL_LIBRARY_ID, String(asRec(body).itemId ?? ""), nowIso());
+    json(res, 200, entry);
+  });
+
+  on("POST", "/api/kitchen/tonight/reorder", async (_req, res, _url, body) => {
+    const entryIds = asRec(body).entryIds;
+    if (!Array.isArray(entryIds)) throw new RejectedPayload("entryIds must be an array");
+    json(res, 200, reorderTonight(db, LOCAL_LIBRARY_ID, entryIds.map(String), nowIso()));
+  });
+
+  on("POST", "/api/kitchen/tonight/:id/remove", async (_req, res, _url, _body, params) => {
+    const removed = removeTonight(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!removed) return json(res, 404, { error: "entry not found" });
+    json(res, 200, { removed });
+  });
+
+  on("POST", "/api/kitchen/tonight/clear", async (_req, res) => {
+    json(res, 200, { removed: clearTonight(db, LOCAL_LIBRARY_ID) });
   });
 
   on("GET", "/api/frame-check", async (_req, res, url) => {
@@ -621,7 +711,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         json(res, 413, { error: error.message });
         return;
       }
-      if (error instanceof LibraryConflict) {
+      if (error instanceof LibraryConflict || error instanceof KitchenConflict) {
         json(res, 409, { error: error.message });
         return;
       }

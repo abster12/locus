@@ -17,6 +17,12 @@ import {
   type ReadingArchiveCounts,
   type ReadingArchiveRecord,
 } from "./reading/module.ts";
+import {
+  exportKitchenRecords,
+  importKitchenRecords,
+  kitchenLibraryIsEmpty,
+  type KitchenArchiveRecord,
+} from "./kitchen/module.ts";
 
 export const ARCHIVE_FORMAT = "locus-library";
 export const ARCHIVE_VERSION = 1;
@@ -59,6 +65,8 @@ const KINDS = [
   "readingDocument",
   "readingProvenance",
   "readingProgress",
+  "kitchenRecipeDocument",
+  "kitchenTonightEntry",
 ] as const;
 
 type Kind = (typeof KINDS)[number];
@@ -103,7 +111,7 @@ export function libraryIsEmpty(db: Db): boolean {
   for (const table of tables) {
     if (count(db, `SELECT COUNT(*) AS n FROM ${table}`) > 0) return false;
   }
-  return readingLibraryIsEmpty(db);
+  return readingLibraryIsEmpty(db) && kitchenLibraryIsEmpty(db);
 }
 
 export function writeLibraryArchive(
@@ -113,7 +121,8 @@ export function writeLibraryArchive(
   libraryId = LOCAL_LIBRARY_ID,
 ): number {
   const reading = exportReadingRecords(db, libraryId);
-  const counts = archiveCounts(db, reading.counts);
+  const kitchen = exportKitchenRecords(db, libraryId);
+  const counts = archiveCounts(db, reading.counts, kitchen.counts);
   const fd = openSync(dest, "w");
   let bytes = 0;
   try {
@@ -134,7 +143,7 @@ export function writeLibraryArchive(
       counts,
       excluded: [...EXCLUDED, ...readingArchiveExcluded()],
     });
-    for (const record of iterateRecords(db, reading.records)) write(record);
+    for (const record of iterateRecords(db, reading.records, kitchen.records)) write(record);
     return bytes;
   } finally {
     closeSync(fd);
@@ -194,7 +203,7 @@ export async function importLibraryArchive(db: Db, path: string): Promise<{ ok: 
   }
 }
 
-function archiveCounts(db: Db, reading: ReadingArchiveCounts): Record<Kind, number> {
+function archiveCounts(db: Db, reading: ReadingArchiveCounts, kitchen: { kitchenRecipeDocument: number; kitchenTonightEntry: number }): Record<Kind, number> {
   const backfillSetting = readingBackfillSettingKey();
   return {
     sourceAccount: count(db, `SELECT COUNT(*) AS n FROM source_accounts`),
@@ -211,10 +220,15 @@ function archiveCounts(db: Db, reading: ReadingArchiveCounts): Record<Kind, numb
     sourceRecord: count(db, `SELECT COUNT(*) AS n FROM source_records`),
     sourceMembership: count(db, `SELECT COUNT(*) AS n FROM source_memberships`),
     ...reading,
+    ...kitchen,
   };
 }
 
-function* iterateRecords(db: Db, readingRecords: Iterable<ReadingArchiveRecord>): Generator<Rec> {
+function* iterateRecords(
+  db: Db,
+  readingRecords: Iterable<ReadingArchiveRecord>,
+  kitchenRecords: readonly KitchenArchiveRecord[],
+): Generator<Rec> {
   for (const row of all(db, `SELECT id, source, external_id, display_name, created_at FROM source_accounts`)) {
     yield {
       kind: "sourceAccount",
@@ -326,6 +340,9 @@ function* iterateRecords(db: Db, readingRecords: Iterable<ReadingArchiveRecord>)
       sourcePosition: row.source_position,
     };
   }
+  // Kitchen records reference Items, so they are written after them. Recipe
+  // Documents cannot survive their Item; broken Tonight pins can.
+  yield* kitchenRecords;
   yield* readingRecords;
 }
 
@@ -528,6 +545,11 @@ function insertStaged(db: Db, staged: Stage): void {
       typeof row.sourcePosition === "number" ? row.sourcePosition : null,
     );
   }
+  importKitchenRecords(db, {
+    recipes: kindRows(staged, "kitchenRecipeDocument"),
+    tonight: kindRows(staged, "kitchenTonightEntry"),
+    itemIds: uniqueIds(kindRows(staged, "item"), "id"),
+  });
   importReadingRecords(db, {
     documents: kindRows(staged, "readingDocument"),
     provenance: kindRows(staged, "readingProvenance"),

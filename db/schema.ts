@@ -1,6 +1,6 @@
 import type { Db } from "./open.ts";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -287,6 +287,38 @@ CREATE INDEX IF NOT EXISTS idx_reading_documents_queue ON reading_documents(libr
 CREATE INDEX IF NOT EXISTS idx_reading_documents_work ON reading_documents(next_attempt_at, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_reading_provenance_item ON reading_provenance(item_id);
 CREATE INDEX IF NOT EXISTS idx_reading_provenance_document ON reading_provenance(document_id);
+
+CREATE TABLE IF NOT EXISTS kitchen_recipe_documents (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('draft', 'reviewed')),
+  source_revision TEXT NOT NULL,
+  source_caption TEXT NOT NULL,
+  updated_by TEXT NOT NULL CHECK (updated_by IN ('user', 'agent')),
+  draft_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(library_id, item_id),
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS kitchen_tonight_entries (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(library_id, item_id),
+  UNIQUE(library_id, position)
+);
+
+CREATE INDEX IF NOT EXISTS kitchen_tonight_library_position
+  ON kitchen_tonight_entries(library_id, position);
+CREATE INDEX IF NOT EXISTS kitchen_recipe_library_item
+  ON kitchen_recipe_documents(library_id, item_id);
 `;
 
 type ForeignKey = { table: string; from: string; to: string; on_delete: string };

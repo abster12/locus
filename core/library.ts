@@ -53,6 +53,8 @@ export interface ItemListFilter {
   q?: string;
   collectionId?: string;
   shelf?: string;
+  searchRecipeDocuments?: boolean;
+  searchRecipeLibraryId?: string;
 }
 
 export interface ItemListCounts {
@@ -211,8 +213,13 @@ function matchingWhere(filter: ItemListFilter, includeShelf = true): { where: st
       i.title LIKE ? OR i.body LIKE ? OR i.author_name LIKE ? OR i.author_handle LIKE ?
       OR EXISTS (SELECT 1 FROM notes n WHERE n.item_id = i.id AND n.body LIKE ?)
       OR EXISTS (SELECT 1 FROM memberships m JOIN tags t ON t.id = m.target_id WHERE m.item_id = i.id AND t.name LIKE ?)
+      ${filter.searchRecipeDocuments && filter.searchRecipeLibraryId ? `OR EXISTS (
+        SELECT 1 FROM kitchen_recipe_documents kr
+         WHERE kr.item_id = i.id AND kr.library_id = ? AND kr.draft_json LIKE ?
+      )` : ""}
     )`);
     params.push(like, like, like, like, like, like);
+    if (filter.searchRecipeDocuments && filter.searchRecipeLibraryId) params.push(filter.searchRecipeLibraryId, like);
   }
   if (includeShelf && filter.shelf && isShelfKey(filter.shelf)) {
     const condition = shelfCondition(filter.shelf);
@@ -283,6 +290,36 @@ export function listItems(db: Db, filter: ItemListFilter = {}): ItemCard[] {
       ORDER BY COALESCE(i.published_at, '') DESC, i.first_observed_at DESC, i.id DESC`)
     .all(...matched.params) as ItemRow[];
   return rows.map((row) => hydrate(db, row));
+}
+
+/** True when one Item matches the same filters as `listItemsPage`. */
+export function itemMatchesFilter(db: Db, itemId: string, filter: ItemListFilter = {}): boolean {
+  const matched = matchingWhere(filter);
+  matched.where.push(`i.id = ?`);
+  matched.params.push(itemId);
+  const row = db
+    .prepare(
+      `SELECT 1 AS ok FROM items i LEFT JOIN item_state s ON s.item_id = i.id ${matched.where.length ? `WHERE ${matched.where.join(" AND ")}` : ""} LIMIT 1`,
+    )
+    .get(...matched.params) as { ok: number } | undefined;
+  return Boolean(row);
+}
+
+/** Distinct source ids among items matching the same filters as `listItemsPage`. */
+export function listMatchingSources(db: Db, filter: ItemListFilter = {}): string[] {
+  const matched = matchingWhere(filter);
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT a.source AS source
+         FROM items i
+         LEFT JOIN item_state s ON s.item_id = i.id
+         JOIN source_records r ON r.item_id = i.id
+         JOIN source_accounts a ON a.id = r.source_account_id
+        ${matched.where.length ? `WHERE ${matched.where.join(" AND ")}` : ""}
+        ORDER BY a.source`,
+    )
+    .all(...matched.params) as { source: string }[];
+  return rows.map((row) => row.source);
 }
 
 export function getItem(db: Db, id: string): ItemCard | null {
@@ -422,6 +459,8 @@ export function wipeLibrary(db: Db): void {
     "reading_progress",
     "reading_provenance",
     "reading_documents",
+    "kitchen_tonight_entries",
+    "kitchen_recipe_documents",
     "link_previews",
     "summaries",
     "notes",

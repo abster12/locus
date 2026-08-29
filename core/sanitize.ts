@@ -101,6 +101,25 @@ export function isPlatformPermalink(url: string): boolean {
   }
 }
 
+export function instagramEmbedUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (!/(^|\.)instagram\.com$/i.test(host)) return null;
+    const match = u.pathname.match(/\/(p|reel|tv)\/([^/?#]+)/i);
+    return match?.[1] && match[2]
+      ? `https://www.instagram.com/${match[1].toLowerCase()}/${match[2]}/embed`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function youtubeEmbedUrl(url: string): string | null {
+  const id = youtubeVideoId(url);
+  return id ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}` : null;
+}
+
 export function youtubeVideoId(url: string): string | null {
   try {
     const u = new URL(url);
