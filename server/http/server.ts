@@ -46,8 +46,10 @@ import { classifySourceAccount } from "../source-state.ts";
 import {
   LOCAL_LIBRARY_ID,
   backfillReading,
+  getAgentReadingDocument,
   getReadingDocument,
   listReadingDocuments,
+  listReadingDocumentsForAgent,
   openReadingAsset,
   removeReadingDocument,
   retryReadingDocument,
@@ -56,6 +58,7 @@ import {
   undoRemoveReadingDocument,
   updateReadingProgress,
   wakeReadingWorker,
+  type ReadingListQuery,
   type ReadingSort,
   type ReadingView,
 } from "../reading/module.ts";
@@ -153,7 +156,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   };
 
   on("GET", "/api/session", async (_req, res) => {
-    json(res, 200, { csrf: csrfToken(install), port: PORT });
+    json(res, 200, { csrf: csrfToken(install), port: PORT, libraryId: LOCAL_LIBRARY_ID });
   });
 
   on("GET", "/api/items", async (_req, res, url) => {
@@ -283,10 +286,18 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
 
   // Library id is always "local" on localhost. Clients cannot choose it.
   on("GET", "/api/reading", async (_req, res, url) => {
+    if (url.searchParams.get("audience") === "agent") {
+      json(res, 200, listReadingDocumentsForAgent(db, LOCAL_LIBRARY_ID, parseAgentReadingQuery(url)));
+      return;
+    }
     json(res, 200, listReadingDocuments(db, LOCAL_LIBRARY_ID, parseReadingQuery(url)));
   });
 
-  on("GET", "/api/reading/:documentId", async (_req, res, _url, _body, params) => {
+  on("GET", "/api/reading/:documentId", async (_req, res, url, _body, params) => {
+    if (url.searchParams.get("audience") === "agent") {
+      json(res, 200, { document: getAgentReadingDocument(db, LOCAL_LIBRARY_ID, params.documentId ?? "") });
+      return;
+    }
     json(res, 200, { document: getReadingDocument(db, LOCAL_LIBRARY_ID, params.documentId ?? "") });
   });
 
@@ -946,6 +957,23 @@ function parseReadingQuery(url: URL): {
     cursor: url.searchParams.get("cursor") ?? undefined,
     limit: Number.isFinite(limit) ? limit : undefined,
   };
+}
+
+// Agent reads forward raw query strings so unknown filters reach Reading's
+// validation and come back as 400 instead of silently widening the query.
+// The cast only marks the trust boundary: listReadingDocumentsForAgent
+// re-validates every field and throws RejectedPayload on unknown values.
+function parseAgentReadingQuery(url: URL): ReadingListQuery {
+  const limitRaw = url.searchParams.get("limit");
+  return {
+    view: url.searchParams.get("view") ?? undefined,
+    kind: url.searchParams.get("kind") ?? undefined,
+    source: url.searchParams.get("source") ?? undefined,
+    q: url.searchParams.get("q") ?? undefined,
+    sort: url.searchParams.get("sort") ?? undefined,
+    cursor: url.searchParams.get("cursor") ?? undefined,
+    limit: limitRaw === null ? undefined : Number(limitRaw),
+  } as ReadingListQuery;
 }
 
 function bearer(req: IncomingMessage): string | null {

@@ -4,6 +4,7 @@ import { getSetting, MissingResource, setSetting } from "../../core/commands.ts"
 import { getItem } from "../../core/library.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import {
+  collectText,
   contentHash,
   dropMissingImages,
   hasBlockId,
@@ -34,6 +35,16 @@ export {
   wakeReadingWorker,
 };
 export const UNDO_WINDOW_MS = 30_000;
+export const AGENT_READING_TEXT_LIMIT = 30_000;
+export const AGENT_READING_LIST_LIMIT = 50;
+const AGENT_QUERY_MAX = 200;
+const AGENT_PROVENANCE_LIMIT = 5;
+const AGENT_NOTE_LIMIT = 2;
+const AGENT_NOTE_CHARS = 240;
+const AGENT_TAG_LIMIT = 8;
+const AGENT_TAG_CHARS = 80;
+const AGENT_KINDS: ReadingKind[] = ["article", "documentation", "repository", "pdf", "unknown"];
+const AGENT_SORTS: ReadingSort[] = ["recent", "oldest", "shortest", "longest", "publication"];
 const BACKFILL_CURSOR = "reading.backfill.cursor";
 const BACKFILL_DONE = "done";
 const BACKFILL_BATCH = 50;
@@ -143,6 +154,57 @@ export interface ReadingPageResult {
   };
 }
 
+export type AgentReadingState = "unread" | "reading" | "finished";
+
+export interface AgentReadingSummary {
+  id: string;
+  title: string;
+  publication: string | null;
+  host: string;
+  excerpt: string | null;
+  kind: ReadingKind;
+  availability: ReadingAvailability;
+  hasStoredText: boolean;
+  readingMinutes: number | null;
+  lastSavedAt: string;
+  sources: string[];
+  readingState: AgentReadingState;
+  canonicalUrl: string | null;
+}
+
+export interface AgentReadingProvenance {
+  source: string;
+  savedAt: string;
+  tags: string[];
+  notes: string[];
+}
+
+export interface AgentReadingDocument {
+  id: string;
+  title: string;
+  byline: string | null;
+  publication: string | null;
+  host: string;
+  excerpt: string | null;
+  kind: ReadingKind;
+  availability: ReadingAvailability;
+  hasStoredText: boolean;
+  readingMinutes: number | null;
+  lastSavedAt: string;
+  readingState: AgentReadingState;
+  canonicalUrl: string | null;
+  provenance: AgentReadingProvenance[];
+  text: string | null;
+  truncated: boolean;
+  totalTextLength: number;
+}
+
+export interface AgentReadingPageResult {
+  items: AgentReadingSummary[];
+  nextCursor: string | null;
+  counts: ReadingPageResult["counts"];
+}
+
 /**
  * The archive adapter's only view of Reading data. The archive format still
  * names the three durable Reading record kinds, but table layout, validation,
@@ -197,6 +259,7 @@ type DocumentRow = {
   progress_state: string | null;
   progress_value: number | null;
   progress_anchor: string | null;
+  has_stored_text?: number;
 };
 
 type Cursor = { sort: ReadingSort; k: string; id: string };
@@ -634,6 +697,26 @@ export function listReadingDocuments(db: Db, libraryId: string, query: ReadingLi
   return { ...emptyPage, items: page.items, nextCursor: page.nextCursor };
 }
 
+export function listReadingDocumentsForAgent(
+  db: Db,
+  libraryId: string,
+  query: ReadingListQuery = {},
+): AgentReadingPageResult {
+  const parsed = parseAgentListQuery(query);
+  const counts = countReading(db, libraryId, parsed);
+  const extra: ListExtra =
+    parsed.view === "finished"
+      ? { finishedOnly: true, includeHidden: true }
+      : { unreadOnly: true, includeHidden: true };
+  const page = loadDocumentPage(db, libraryId, parsed, extra, parsed.limit);
+  const items: AgentReadingSummary[] = [];
+  for (const row of page.rows) {
+    const summary = toAgentSummary(db, libraryId, row);
+    if (summary) items.push(summary);
+  }
+  return { items, nextCursor: page.nextCursor, counts };
+}
+
 export function getReadingDocument(db: Db, libraryId: string, documentId: string): ReadingDocumentDetail {
   const row = db
     .prepare(
@@ -682,6 +765,38 @@ export function getReadingDocument(db: Db, libraryId: string, documentId: string
       : null,
     provenance,
     actions: { openOriginal, retry, remove: true },
+  };
+}
+
+export function getAgentReadingDocument(db: Db, libraryId: string, documentId: string): AgentReadingDocument {
+  const detail = getReadingDocument(db, libraryId, documentId);
+  const fullText = detail.contentBlocks ? collectText(detail.contentBlocks.blocks) : null;
+  const totalTextLength = fullText?.length ?? 0;
+  const truncated = totalTextLength > AGENT_READING_TEXT_LIMIT;
+  const text = fullText ? fullText.slice(0, AGENT_READING_TEXT_LIMIT) : null;
+  return {
+    id: detail.id,
+    title: detail.title,
+    byline: detail.byline,
+    publication: detail.publication,
+    host: hostOf(detail.canonicalUrl),
+    excerpt: detail.excerpt,
+    kind: detail.kind,
+    availability: detail.availability,
+    hasStoredText: detail.contentBlocks != null,
+    readingMinutes: detail.readingMinutes,
+    lastSavedAt: detail.lastSavedAt,
+    readingState: detail.progress?.state ?? "unread",
+    canonicalUrl: detail.actions.openOriginal ? detail.canonicalUrl : null,
+    provenance: detail.provenance.slice(0, AGENT_PROVENANCE_LIMIT).map((entry) => ({
+      source: entry.source,
+      savedAt: entry.sourceSavedAt ?? entry.firstObservedAt,
+      tags: entry.tags.slice(0, AGENT_TAG_LIMIT).map((tag) => tag.name.slice(0, AGENT_TAG_CHARS)),
+      notes: entry.notes.slice(0, AGENT_NOTE_LIMIT).map((note) => note.body.slice(0, AGENT_NOTE_CHARS)),
+    })),
+    text,
+    truncated,
+    totalTextLength,
   };
 }
 
@@ -831,7 +946,8 @@ const LIST_SELECT = `
   SELECT d.id, d.library_id, d.canonical_url, d.observed_url, d.final_url, d.kind, d.availability, d.failure_code,
          d.original_status, d.original_checked_at, d.title, d.subtitle, d.byline, d.publication, d.published_at,
          d.language, d.excerpt, d.word_count, d.reading_minutes, d.last_saved_at, d.fetched_at, d.updated_at,
-         d.removed_at, NULL AS content_blocks, d.hero_asset_id,
+         d.removed_at, (d.content_blocks IS NOT NULL AND length(d.content_blocks) > 0) AS has_stored_text,
+         NULL AS content_blocks, d.hero_asset_id,
          p.state AS progress_state, p.progress AS progress_value, p.anchor AS progress_anchor
     FROM reading_documents d
     LEFT JOIN reading_progress p ON p.library_id = d.library_id AND p.document_id = d.id
@@ -975,7 +1091,28 @@ type ListExtra = {
   unreadOnly?: boolean;
   finishedOnly?: boolean;
   openedOnly?: boolean;
+  includeHidden?: boolean;
 };
+
+function loadDocumentPage(
+  db: Db,
+  libraryId: string,
+  query: ReadingListQuery,
+  extra: ListExtra,
+  limit: number,
+): { rows: DocumentRow[]; nextCursor: string | null } {
+  const sort = query.sort ?? "recent";
+  const cursor = decodeCursor(query.cursor, sort);
+  const { sql, params } = matchingWhere(libraryId, query, extra, cursor);
+  const order = orderSql(sort);
+  const rows = db.prepare(`${LIST_SELECT} ${sql} ${order} LIMIT ?`).all(...params, limit + 1) as DocumentRow[];
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor: rows.length > limit && last ? encodeCursor({ sort, k: cursorKey(last, sort), id: last.id }) : null,
+  };
+}
 
 function pageDocuments(
   db: Db,
@@ -984,18 +1121,8 @@ function pageDocuments(
   extra: ListExtra,
   limit: number,
 ): { items: ReadingSummary[]; nextCursor: string | null } {
-  const sort = query.sort ?? "recent";
-  const cursor = decodeCursor(query.cursor, sort);
-  const { sql, params } = matchingWhere(libraryId, query, extra, cursor);
-  const order = orderSql(sort);
-  const rows = db.prepare(`${LIST_SELECT} ${sql} ${order} LIMIT ?`).all(...params, limit + 1) as DocumentRow[];
-  const page = rows.slice(0, limit);
-  const items = hydrateSummaries(db, libraryId, page);
-  const last = page[page.length - 1];
-  return {
-    items,
-    nextCursor: rows.length > limit && last ? encodeCursor({ sort, k: cursorKey(last, sort), id: last.id }) : null,
-  };
+  const page = loadDocumentPage(db, libraryId, query, extra, limit);
+  return { items: hydrateSummaries(db, libraryId, page.rows), nextCursor: page.nextCursor };
 }
 
 function selectDocuments(
@@ -1022,8 +1149,11 @@ function matchingWhere(
     where.push(`d.availability = ?`);
     params.push(extra.availability);
   }
-  where.push(`NOT (${HIDDEN_FROM_LIST})`);
-  if (extra.unreadOnly) where.push(`(p.document_id IS NULL OR p.state = 'reading') AND d.kind NOT IN ('unknown', 'pdf')`);
+  if (!extra.includeHidden) where.push(`NOT (${HIDDEN_FROM_LIST})`);
+  if (extra.unreadOnly) {
+    where.push(`(p.document_id IS NULL OR p.state = 'reading')`);
+    if (!extra.includeHidden) where.push(`d.kind NOT IN ('unknown', 'pdf')`);
+  }
   if (extra.openedOnly) where.push(`d.availability = 'ready' AND p.state = 'reading' AND d.kind NOT IN ('unknown', 'pdf')`);
   if (extra.finishedOnly) where.push(`p.state = 'finished'`);
   if (query.kind) {
@@ -1176,6 +1306,26 @@ function toSummary(db: Db, libraryId: string, row: DocumentRow): ReadingSummary 
       row.progress_state === "reading" || row.progress_state === "finished"
         ? { state: row.progress_state, progress: Number(row.progress_value ?? 0) }
         : null,
+  };
+}
+
+function toAgentSummary(db: Db, libraryId: string, row: DocumentRow): AgentReadingSummary | null {
+  const summary = toSummary(db, libraryId, row);
+  if (!summary) return null;
+  return {
+    id: summary.id,
+    title: summary.title,
+    publication: summary.publication,
+    host: summary.host,
+    excerpt: summary.excerpt,
+    kind: summary.kind,
+    availability: summary.availability,
+    hasStoredText: Boolean(row.has_stored_text),
+    readingMinutes: summary.readingMinutes,
+    lastSavedAt: summary.lastSavedAt,
+    sources: summary.sources,
+    readingState: summary.progress?.state ?? "unread",
+    canonicalUrl: canOpenOriginal(row) ? summary.canonicalUrl : null,
   };
 }
 
@@ -1469,6 +1619,33 @@ function intReadingOrNull(value: unknown): number | null {
   if (value == null) return null;
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new RejectedPayload("invalid archive field");
   return Math.floor(value);
+}
+
+function parseAgentListQuery(query: ReadingListQuery): ReadingListQuery & { view: ReadingView; sort: ReadingSort; limit: number } {
+  const view = query.view;
+  if (view != null && view !== "queue" && view !== "finished") throw new RejectedPayload("invalid view");
+  const sort = query.sort;
+  if (sort != null && !AGENT_SORTS.includes(sort)) throw new RejectedPayload("invalid sort");
+  const kind = query.kind;
+  if (kind != null && !AGENT_KINDS.includes(kind as ReadingKind)) throw new RejectedPayload("invalid kind");
+  const source = query.source;
+  if (source != null && (typeof source !== "string" || !/^[a-z][a-z0-9_-]{0,39}$/i.test(source))) {
+    throw new RejectedPayload("invalid source");
+  }
+  const q = query.q;
+  if (q != null && (typeof q !== "string" || q.length > AGENT_QUERY_MAX)) throw new RejectedPayload("invalid query");
+  const limit = query.limit;
+  if (limit != null && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > AGENT_READING_LIST_LIMIT)) {
+    throw new RejectedPayload("invalid limit");
+  }
+  const resolvedSort = sort ?? "recent";
+  if (query.cursor != null && !decodeCursor(query.cursor, resolvedSort)) throw new RejectedPayload("invalid cursor");
+  return {
+    ...query,
+    view: view === "finished" ? "finished" : "queue",
+    sort: resolvedSort,
+    limit: limit ?? AGENT_READING_LIST_LIMIT,
+  };
 }
 
 function encodeCursor(cursor: Cursor): string {

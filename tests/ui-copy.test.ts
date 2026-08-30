@@ -12,6 +12,20 @@ test("visible page copy does not expose implementation language", () => {
   }
 });
 
+test("Reading asks for the browser agent honestly, discloses the data flow, and labels agent-authored reasons", () => {
+  const page = readFileSync(new URL("../app/src/ReadingPage.tsx", import.meta.url), "utf8");
+  assert.match(page, /Your browser agent can help with your reading/i);
+  assert.match(page, /search your saved articles, compare them, or recommend what to read next/i);
+  assert.match(page, /saved Reading metadata and stored article text/i);
+  assert.doesNotMatch(page, /ask agent/i);
+  assert.doesNotMatch(page, /Want a pick from your queue|reading-moods|reading-mood/);
+  assert.match(page, /Agent:/);
+  assert.match(page, /Dismiss recommendations/);
+  assert.match(page, /reading-recs-live/);
+  assert.match(page, /aria-live="polite"/);
+  assert.match(page, /webmcpReady \? \(/);
+});
+
 test("Atlas page uses the locked kit and does not match geography in the client", () => {
   const page = readFileSync(new URL("../app/src/AtlasPage.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(page, /detectPlaces|core\/places|Southeast Asia|Unplaced/);

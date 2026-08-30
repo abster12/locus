@@ -17,6 +17,7 @@ import { SummaryPage } from "./SummaryPage.tsx";
 import { canMountLiveFrame, firstStageDestination } from "./stage-navigation.ts";
 import { localDay } from "../../core/dates.ts";
 import { LIBRARY_CHANGED_EVENT, notifyLibraryChanged } from "./library-events.ts";
+import { AUTHENTICATED_LIBRARY_CHANGED_EVENT, authenticatedLibraryFromEvent } from "./library-identity.ts";
 
 type Route =
   | { name: "recent"; shelf: string }
@@ -107,6 +108,7 @@ export function App() {
   const initialRoute = parseHash();
   const [route, setRoute] = useState<Route>(parseHash);
   const [ready, setReady] = useState(false);
+  const [libraryIdentity, setLibraryIdentity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inbox, setInbox] = useState<number | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => readStoredTheme() ?? systemTheme());
@@ -164,11 +166,22 @@ export function App() {
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
+    const onAuthenticatedLibraryChange = (event: Event) => {
+      const next = authenticatedLibraryFromEvent(event);
+      if (next) setLibraryIdentity(next);
+    };
     window.addEventListener("hashchange", onHash);
+    window.addEventListener(AUTHENTICATED_LIBRARY_CHANGED_EVENT, onAuthenticatedLibraryChange);
     boot()
-      .then(() => setReady(true))
+      .then((session) => {
+        setLibraryIdentity(session.libraryId);
+        setReady(true);
+      })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-    return () => window.removeEventListener("hashchange", onHash);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener(AUTHENTICATED_LIBRARY_CHANGED_EVENT, onAuthenticatedLibraryChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -228,7 +241,7 @@ export function App() {
       </div>
     );
   }
-  if (!ready) {
+  if (!ready || !libraryIdentity) {
     return (
       <div className="shell">
         <p className="quiet">Opening the desk…</p>
@@ -342,7 +355,7 @@ export function App() {
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
       {route.name === "sources" && <SourcesPage />}
-      {route.name === "reading" && <ReadingPage />}
+      {route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
       {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {route.name === "kitchen" && <KitchenPage />}
       {route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}

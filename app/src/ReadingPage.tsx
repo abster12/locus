@@ -2,6 +2,12 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { api, type ReadingPage as ReadingIndex, type ReadingSummary } from "./api.ts";
 import { pubLabel } from "./item-content.ts";
 import { SourceMark } from "./SourceMark.tsx";
+import {
+  attachReadingWebmcp,
+  detectReadingWebmcpRuntime,
+  type ReadingWebmcpHost,
+  type ReadingWebmcpPanelEntry,
+} from "./reading-webmcp.ts";
 
 type View = "queue" | "finished";
 type Sort = "recent" | "oldest" | "shortest" | "longest" | "publication";
@@ -23,11 +29,11 @@ const EMPTY_QUERY: IndexQuery = {
   source: "",
 };
 
-export function ReadingPage() {
-  return <ReadingIndexView />;
+export function ReadingPage({ libraryIdentity }: { libraryIdentity: string }) {
+  return <ReadingIndexView libraryIdentity={libraryIdentity} />;
 }
 
-function ReadingIndexView() {
+function ReadingIndexView({ libraryIdentity }: { libraryIdentity: string }) {
   const [query, setQuery] = useState<IndexQuery>(() => readIndexQuery());
   const [draftQ, setDraftQ] = useState(query.q);
   const [page, setPage] = useState<ReadingIndex | null>(null);
@@ -36,11 +42,52 @@ function ReadingIndexView() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [undo, setUndo] = useState<{ token: string; title: string } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [recs, setRecs] = useState<{ mood: string | null; recommendations: ReadingWebmcpPanelEntry[] } | null>(null);
+  const [webmcpReady, setWebmcpReady] = useState(false);
   const searchTimer = useRef<number | null>(null);
+  const recsDialog = useRef<HTMLElement | null>(null);
+  const recsDismiss = useRef<HTMLButtonElement | null>(null);
+  const recsOpen = recs !== null;
 
   useEffect(() => {
     writeIndexQuery(query);
   }, [query]);
+
+  useEffect(() => {
+    if (!recsOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    const focusFrame = window.requestAnimationFrame(() => recsDismiss.current?.focus());
+    document.body.style.overflow = "hidden";
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setRecs(null);
+        return;
+      }
+      if (event.key !== "Tab" || !recsDialog.current) return;
+      const focusable = [...recsDialog.current.querySelectorAll<HTMLElement>("a[href], button:not([disabled])")];
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && (document.activeElement === first || !recsDialog.current.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [recsOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -55,7 +102,7 @@ function ReadingIndexView() {
         if (!controller.signal.aborted) setErr(e instanceof Error ? e.message : String(e));
       });
     return () => controller.abort();
-  }, [query]);
+  }, [query, libraryIdentity]);
 
   useLayoutEffect(() => {
     if (!page) return;
@@ -90,7 +137,58 @@ function ReadingIndexView() {
     };
   }, []);
 
+  // Page-defined WebMCP registration lives and dies with this route. The host
+  // reads live page state through the ref below, so filter changes
+  // never re-register the four tools.
+  useEffect(() => {
+    setWebmcpReady(detectReadingWebmcpRuntime() != null);
+    const host: ReadingWebmcpHost = {
+      getPageContext: () => {
+        const current = webmcpState.current;
+        return { ...current, counts: { ...current.counts } };
+      },
+      async search(queryRecord) {
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(queryRecord)) {
+          if (typeof value === "number") params.set(key, String(value));
+          else if (typeof value === "string" && value) params.set(key, value);
+        }
+        const page = await api.readingForAgent(params.toString());
+        return { items: page.items, nextCursor: page.nextCursor };
+      },
+      async getDocument(documentId) {
+        try {
+          const result = await api.readingDocumentForAgent(documentId);
+          return result.document;
+        } catch (error) {
+          if (error instanceof Error && error.message === "document not found") return null;
+          throw error;
+        }
+      },
+      present(panel) {
+        setRecs(panel);
+      },
+      log(entry) {
+        if (import.meta.env.DEV) {
+          console.info("reading-webmcp", entry.tool, entry.outcome, `${entry.durationMs}ms`, entry.resultCount ?? "");
+        }
+      },
+    };
+    return attachReadingWebmcp(host);
+  }, [libraryIdentity]);
+
   const counts = page?.counts;
+  const webmcpSnapshot = {
+    mood: null,
+    view: query.view,
+    q: query.q,
+    kind: query.kind,
+    source: query.source,
+    sort: query.sort,
+    counts: counts ?? { unread: 0, reading: 0, preparing: 0, finished: 0 },
+  };
+  const webmcpState = useRef(webmcpSnapshot);
+  webmcpState.current = webmcpSnapshot;
   const hasFilters = Boolean(query.q || query.kind || query.source);
   const queueUnread = page?.unread.items ?? [];
   const unreadCount = page?.counts.unread ?? 0;
@@ -197,6 +295,24 @@ function ReadingIndexView() {
     }
   }
 
+  // Opening a recommendation uses the existing Opened progress behavior — the
+  // same advance call the queue cards make. Mark finished/unread stay human UI.
+  function onRecOpened(entry: ReadingWebmcpPanelEntry): void {
+    if (entry.readingState === "finished") return;
+    void api.readingProgress(entry.documentId, { op: "advance" }).then(() => {
+      setRecs((prev) =>
+        prev
+          ? {
+              ...prev,
+              recommendations: prev.recommendations.map((row) =>
+                row.documentId === entry.documentId ? { ...row, readingState: "reading" } : row,
+              ),
+            }
+          : prev,
+      );
+    }, () => {});
+  }
+
   return (
     <div className="reading-page">
       <section className="reading-index">
@@ -211,7 +327,18 @@ function ReadingIndexView() {
             </span>
           ) : null}
         </div>
-        <p className="pagesub">A queue of writing saved from your library. Locus never pretends a blocked page is an article.</p>
+        <p className="pagesub">Writing saved from your library. Locus never pretends a blocked page is an article.</p>
+        {webmcpReady ? (
+          <section className="reading-agent" aria-label="Browser agent available">
+            <span className="reading-agent-mark" aria-hidden="true">✦</span>
+            <div>
+              <p className="reading-agent-title">Your browser agent can help with your reading</p>
+              <p className="reading-agent-copy">
+                Ask it to search your saved articles, compare them, or recommend what to read next—it can bring the results back here. When asked, your agent may receive saved Reading metadata and stored article text.
+              </p>
+            </div>
+          </section>
+        ) : null}
         <div className="reading-controls">
           <label className="reading-search">
             <span className="visually-hidden">Search reading</span>
@@ -261,6 +388,52 @@ function ReadingIndexView() {
             Filters
           </button>
         </div>
+        <p className="visually-hidden reading-recs-live" aria-live="polite">
+          {recs
+            ? `${recs.recommendations.length} recommendation${recs.recommendations.length === 1 ? "" : "s"}${recs.mood ? ` for ${recs.mood}` : ""} · chosen by your browser agent`
+            : ""}
+        </p>
+        {recs ? (
+          <div
+            className="reading-recs-layer"
+            onPointerDown={(event) => {
+              if (event.target === event.currentTarget) setRecs(null);
+            }}
+          >
+            <section
+              ref={recsDialog}
+              className="reading-recs"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="reading-recs-title"
+            >
+              <div className="reading-recs-head">
+                <div>
+                  <p className="reading-recs-kicker">Browser agent</p>
+                  <h2 id="reading-recs-title">Recommendations</h2>
+                </div>
+                <button
+                  ref={recsDismiss}
+                  type="button"
+                  className="reading-recs-dismiss"
+                  aria-label="Dismiss recommendations"
+                  onClick={() => setRecs(null)}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+              <p className="reading-recs-sub">
+                {recs.recommendations.length} recommendation{recs.recommendations.length === 1 ? "" : "s"}
+                {recs.mood ? ` for ${recs.mood}` : ""} · chosen from your saved reading
+              </p>
+              <ul className="reading-rec-list">
+                {recs.recommendations.map((entry) => (
+                  <RecommendationRow key={entry.documentId} entry={entry} onOpen={onRecOpened} />
+                ))}
+              </ul>
+            </section>
+          </div>
+        ) : null}
         {err ? (
           <p className="bad" role="alert">
             {err}{" "}
@@ -599,6 +772,59 @@ function kindLabel(kind: string): string {
   if (kind === "pdf") return "PDF";
   if (kind === "unknown") return "Unknown";
   return "Article";
+}
+
+function RecommendationRow({
+  entry,
+  onOpen,
+}: {
+  entry: ReadingWebmcpPanelEntry;
+  onOpen: (entry: ReadingWebmcpPanelEntry) => void;
+}) {
+  const href = safeHttpUrl(entry.canonicalUrl);
+  return (
+    <li>
+      <article className="reading-rec">
+        {href ? (
+          <a
+            className="reading-rec-open"
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${entry.title} (opens in a new tab)`}
+            onClick={() => onOpen(entry)}
+          >
+            <span className="reading-title">{entry.title}</span>
+          </a>
+        ) : (
+          <span className="reading-title">{entry.title}</span>
+        )}
+        <p className="reading-meta">
+          <span>{entry.publication || entry.host}</span>
+          {entry.readingMinutes ? <span>{entry.readingMinutes} min</span> : null}
+          <span>{readingStateLabel(entry.readingState)}</span>
+          <span className="reading-rec-basis">{basisLabel(entry.basis)}</span>
+        </p>
+        <p className="reading-rec-reason">
+          <span className="reading-rec-agent">Agent:</span> {entry.reason}
+        </p>
+      </article>
+    </li>
+  );
+}
+
+function readingStateLabel(state: string): string {
+  if (state === "reading") return "Opened";
+  if (state === "finished") return "Finished";
+  return "Unread";
+}
+
+// Restates the evidence basis the agent declared, so the reason is honest
+// about whether it came from your saved copy, saved details, or the original.
+function basisLabel(basis: string): string {
+  if (basis === "stored_text") return "from your saved copy";
+  if (basis === "external_source") return "from the original page";
+  return "from saved details";
 }
 
 function safeHttpUrl(raw: string): string | null {

@@ -109,6 +109,48 @@ export interface ReadingDocumentDetail {
   actions: { openOriginal: boolean; retry: boolean; remove: boolean };
 }
 
+export interface AgentReadingSummary {
+  id: string;
+  title: string;
+  publication: string | null;
+  host: string;
+  excerpt: string | null;
+  kind: string;
+  availability: string;
+  hasStoredText: boolean;
+  readingMinutes: number | null;
+  lastSavedAt: string;
+  sources: string[];
+  readingState: string;
+  canonicalUrl: string | null;
+}
+
+export interface AgentReadingPage {
+  items: AgentReadingSummary[];
+  nextCursor: string | null;
+  counts: { unread: number; reading: number; preparing: number; finished: number };
+}
+
+export interface AgentReadingDocument {
+  id: string;
+  title: string;
+  byline: string | null;
+  publication: string | null;
+  host: string;
+  excerpt: string | null;
+  kind: string;
+  availability: string;
+  hasStoredText: boolean;
+  readingMinutes: number | null;
+  lastSavedAt: string;
+  readingState: string;
+  canonicalUrl: string | null;
+  provenance: { source: string; savedAt: string; tags: string[]; notes: string[] }[];
+  text: string | null;
+  truncated: boolean;
+  totalTextLength: number;
+}
+
 export interface ImportResult {
   sessions: number;
   batches: number;
@@ -163,7 +205,11 @@ function apiHeaders(init?: RequestInit): Headers {
 function errorFrom(res: Response, data: unknown): Error {
   const message =
     data && typeof data === "object" && "error" in data ? String((data as { error?: unknown }).error) : res.statusText;
-  return new Error(message || "Request failed");
+  const error = new Error(message || "Request failed");
+  // Duck-typed status so callers (e.g. the WebMCP adapters) can distinguish
+  // client-fixable 400s from server outages without importing HTTP plumbing.
+  (error as { status?: number }).status = res.status;
+  return error;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -181,9 +227,15 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export async function boot(): Promise<void> {
-  const s = await req<{ csrf: string }>("/api/session");
+export interface SessionContext {
+  csrf: string;
+  libraryId: string;
+}
+
+export async function boot(): Promise<SessionContext> {
+  const s = await req<SessionContext>("/api/session");
   csrf = s.csrf;
+  return s;
 }
 
 export const api = {
@@ -219,6 +271,10 @@ export const api = {
     req<{ undoToken: string; undoExpiresAt: string }>(`/api/reading/${encodeURIComponent(id)}/remove`, { method: "POST", body: "{}" }),
   undoRemoveReading: (token: string) =>
     req<{ document: ReadingSummary }>(`/api/reading/undo-remove`, { method: "POST", body: JSON.stringify({ token }) }),
+  readingForAgent: (q = "", signal?: AbortSignal) =>
+    req<AgentReadingPage>(`/api/reading?audience=agent${q ? `&${q}` : ""}`, { signal }),
+  readingDocumentForAgent: (id: string, signal?: AbortSignal) =>
+    req<{ document: AgentReadingDocument }>(`/api/reading/${encodeURIComponent(id)}?audience=agent`, { signal }),
   frameCheck: (url: string) => req<{ framed: "yes" | "no" | "unknown" }>(`/api/frame-check?url=${encodeURIComponent(url)}`),
   autoTag: () => req<{ tagged: number; applied: number }>("/api/items/auto-tag", { method: "POST", body: "{}" }),
   createCollection: (name: string) =>
