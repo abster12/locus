@@ -1,6 +1,6 @@
 import type { Db } from "./open.ts";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 12;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -319,6 +319,87 @@ CREATE INDEX IF NOT EXISTS kitchen_tonight_library_position
   ON kitchen_tonight_entries(library_id, position);
 CREATE INDEX IF NOT EXISTS kitchen_recipe_library_item
   ON kitchen_recipe_documents(library_id, item_id);
+
+CREATE TABLE IF NOT EXISTS atlas_places (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('country', 'admin', 'city', 'neighbourhood', 'venue', 'landmark', 'natural', 'place')),
+  parent_id TEXT,
+  alt_names TEXT NOT NULL DEFAULT '[]',
+  lat REAL,
+  lng REAL,
+  external_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (parent_id) REFERENCES atlas_places(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS atlas_places_library ON atlas_places(library_id, name);
+CREATE INDEX IF NOT EXISTS atlas_places_parent ON atlas_places(parent_id);
+
+CREATE TABLE IF NOT EXISTS atlas_assignments (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('placed', 'needs_place', 'multiple', 'not_atlas')),
+  actor TEXT NOT NULL CHECK (actor IN ('analyzer', 'user')),
+  primary_place_id TEXT,
+  source_revision TEXT NOT NULL,
+  write_version INTEGER NOT NULL DEFAULT 1,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(library_id, item_id),
+  CHECK (
+    (outcome = 'placed' AND primary_place_id IS NOT NULL) OR
+    (outcome IN ('needs_place', 'multiple', 'not_atlas') AND primary_place_id IS NULL)
+  ),
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE,
+  FOREIGN KEY (primary_place_id) REFERENCES atlas_places(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS atlas_assignments_library ON atlas_assignments(library_id, outcome);
+CREATE INDEX IF NOT EXISTS atlas_assignments_place ON atlas_assignments(primary_place_id);
+
+CREATE TABLE IF NOT EXISTS atlas_attempts (
+  item_id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  source_revision TEXT NOT NULL,
+  analyzer_version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+  retryable INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  next_attempt_at TEXT,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS atlas_attempts_queue ON atlas_attempts(library_id, status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS atlas_screenings (
+  item_id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  source_revision TEXT NOT NULL,
+  screening_version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+  candidate INTEGER,
+  retryable INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  next_attempt_at TEXT,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS atlas_screenings_queue ON atlas_screenings(library_id, status, next_attempt_at);
 `;
 
 type ForeignKey = { table: string; from: string; to: string; on_delete: string };
@@ -358,6 +439,8 @@ export function migrateSchema(db: Db): void {
     migrateSourceAccounts(db);
     migrateReadingOwnership(db);
     if (current < 8) migrateReadingRescan(db);
+    if (current < 11) migrateAtlasPolicy(db);
+    if (current < 12) migrateAtlasScreening(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -369,6 +452,41 @@ export function migrateSchema(db: Db): void {
     }
     throw error;
   }
+}
+
+/** Additive Atlas analyzer state. Existing attempts are deliberately marked
+ * with the old policy so the module's versioned backfill can requeue them. */
+function migrateAtlasPolicy(db: Db): void {
+  if (!tableExists(db, "atlas_attempts")) return;
+  const columns = db.prepare(`PRAGMA table_info(atlas_attempts)`).all() as { name: string }[];
+  if (!columns.some((column) => column.name === "analyzer_version")) {
+    db.exec(`ALTER TABLE atlas_attempts ADD COLUMN analyzer_version INTEGER NOT NULL DEFAULT 1`);
+  }
+}
+
+/** The screening queue is additive so old libraries can opt into the two-stage
+ * Atlas pipeline without rewriting user assignments or detailed attempts. */
+function migrateAtlasScreening(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS atlas_screenings (
+      item_id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      screening_version INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+      candidate INTEGER,
+      retryable INTEGER NOT NULL DEFAULT 0,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      failure_reason TEXT,
+      next_attempt_at TEXT,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS atlas_screenings_queue ON atlas_screenings(library_id, status, next_attempt_at);
+  `);
 }
 
 function migrateSourceAccounts(db: Db): void {

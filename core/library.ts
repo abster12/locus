@@ -459,6 +459,10 @@ export function wipeLibrary(db: Db): void {
     "reading_progress",
     "reading_provenance",
     "reading_documents",
+    "atlas_attempts",
+    "atlas_screenings",
+    "atlas_assignments",
+    "atlas_places",
     "kitchen_tonight_entries",
     "kitchen_recipe_documents",
     "link_previews",
@@ -480,6 +484,13 @@ export function wipeLibrary(db: Db): void {
     "source_collections",
     "source_accounts",
   ];
+  db.exec(`UPDATE atlas_places SET parent_id = NULL`);
   for (const table of tables) db.exec(`DELETE FROM ${table}`);
+  db.prepare(
+    `DELETE FROM settings WHERE key IN (
+      'atlas.homePlaceId', 'atlas.backfill.cursor', 'atlas.backfill.version',
+      'atlas.travel-override.cursor', 'atlas.travel-override.version'
+    )`,
+  ).run();
   rmSync(readingAssetsRoot(), { recursive: true, force: true });
 }

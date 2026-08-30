@@ -81,6 +81,26 @@ import {
 } from "../kitchen/module.ts";
 import { kitchenAiStatus, makeCookable } from "../kitchen/ai.ts";
 import {
+  AtlasConflict,
+  applyAtlasScreening,
+  acceptSuggestion,
+  backfillAtlas,
+  backfillTravelAtlas,
+  changePlace,
+  enqueueAtlasItem,
+  createPlace,
+  getAtlasProjection,
+  leaveUnresolved,
+  markMultiple,
+  markNotAtlas,
+  retryAtlasAnalysis,
+  searchPlaces,
+  screeningInputRevision,
+  setExactPlace,
+  setHomeBase,
+} from "../atlas/module.ts";
+import { atlasAiStatus, startAtlasWorker, stopAtlasWorker, wakeAtlasWorker } from "../atlas/ai.ts";
+import {
   allowedHost,
   allowedOrigin,
   csrfToken,
@@ -111,7 +131,10 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   if (!getSetting(db, "refreshOnOpen")) setSetting(db, "refreshOnOpen", "0");
   // Existing libraries get local candidate rows on boot; this never fetches the web.
   backfillReading(db, LOCAL_LIBRARY_ID);
+  backfillAtlas(db, LOCAL_LIBRARY_ID);
+  backfillTravelAtlas(db, LOCAL_LIBRARY_ID);
   if (process.env.LOCUS_READING_WORKER !== "0") startReadingWorker(db);
+  if (process.env.LOCUS_ATLAS_WORKER !== "0" && process.env.LOCUS_NO_VITE !== "1") startAtlasWorker(db);
 
   const routes = new Map<string, RouteFn>();
   const matchers: { method: string; re: RegExp; keys: string[]; fn: RouteFn }[] = [];
@@ -170,13 +193,19 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
 
   on("POST", "/api/items/:id/tags", async (_req, res, _url, body, params) => {
     const rec = asRec(body);
-    const tag = addTag(db, params.id ?? "", String(rec.name ?? ""), typeof rec.color === "string" ? rec.color : undefined);
-    json(res, 200, { tag, item: getItem(db, params.id ?? "") });
+    const itemId = params.id ?? "";
+    const tag = addTag(db, itemId, String(rec.name ?? ""), typeof rec.color === "string" ? rec.color : undefined);
+    enqueueAtlasItem(db, LOCAL_LIBRARY_ID, itemId);
+    wakeAtlasWorker(db);
+    json(res, 200, { tag, item: getItem(db, itemId) });
   });
 
   on("POST", "/api/items/:id/tags/remove", async (_req, res, _url, body, params) => {
-    removeTag(db, params.id ?? "", String(asRec(body).tagId ?? ""));
-    json(res, 200, { item: getItem(db, params.id ?? "") });
+    const itemId = params.id ?? "";
+    removeTag(db, itemId, String(asRec(body).tagId ?? ""));
+    enqueueAtlasItem(db, LOCAL_LIBRARY_ID, itemId);
+    wakeAtlasWorker(db);
+    json(res, 200, { item: getItem(db, itemId) });
   });
 
   on("POST", "/api/items/:id/notes", async (_req, res, _url, body, params) => {
@@ -210,16 +239,34 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     console.info(`auto-tag: asking Pi about ${rows.length} posts`);
     try {
       const mod = await import("../../optional/tagging/pi.ts");
-      const byItem = await mod.autoTagWithPi(rows);
+      const classified = await mod.classifyItemsWithPi(rows);
       let applied = 0;
-      for (const [itemId, tags] of Object.entries(byItem)) {
+      let tagged = 0;
+      for (const [itemId, result] of Object.entries(classified)) {
+        const tags = result.tags;
+        if (tags.length > 0) tagged++;
         for (const tag of tags) {
           addTag(db, itemId, tag);
           applied++;
         }
+        const row = rows.find((candidate) => candidate.id === itemId);
+        if (row) {
+          applyAtlasScreening(
+            db,
+            LOCAL_LIBRARY_ID,
+            itemId,
+            { atlasCandidate: result.atlasCandidate },
+            undefined,
+            (() => {
+              const latest = getItem(db, itemId);
+              return latest ? screeningInputRevision(latest.title, latest.body, latest.tags.map((tag) => tag.name)) : undefined;
+            })(),
+          );
+        }
       }
-      console.info(`auto-tag: tagged ${Object.keys(byItem).length} posts (${applied} tags)`);
-      json(res, 200, { tagged: Object.keys(byItem).length, applied });
+      wakeAtlasWorker(db);
+      console.info(`auto-tag: tagged ${tagged} posts (${applied} tags)`);
+      json(res, 200, { tagged, applied });
     } catch (error) {
       console.error("auto-tag failed:", error instanceof Error ? error.message : error);
       json(res, 502, { error: error instanceof Error ? error.message : String(error) });
@@ -342,6 +389,79 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     json(res, 200, { removed: clearTonight(db, LOCAL_LIBRARY_ID) });
   });
 
+  on("GET", "/api/atlas", async (_req, res) => {
+    json(res, 200, presentAtlas(db));
+  });
+
+  on("GET", "/api/atlas/places", async (_req, res, url) => {
+    json(res, 200, { places: searchPlaces(db, LOCAL_LIBRARY_ID, url.searchParams.get("q") ?? "") });
+  });
+
+  on("POST", "/api/atlas/home", async (_req, res, _url, body) => {
+    const rec = asRec(body);
+    const place = rec.placeId
+      ? setHomeBase(db, LOCAL_LIBRARY_ID, String(rec.placeId))
+      : rec.name
+        ? setHomeBase(db, LOCAL_LIBRARY_ID, createPlace(db, LOCAL_LIBRARY_ID, { name: String(rec.name), kind: rec.kind ? String(rec.kind) : undefined, parentId: rec.parentId ? String(rec.parentId) : null }).id)
+        : setHomeBase(db, LOCAL_LIBRARY_ID, null);
+    json(res, 200, { home: place, atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/items/:id/accept", async (_req, res, _url, body, params) => {
+    const rec = asRec(body);
+    const assignment = acceptSuggestion(db, LOCAL_LIBRARY_ID, params.id ?? "", Number(rec.index), expectedVersion(rec));
+    json(res, 200, { assignment, atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/items/:id/place", async (_req, res, _url, body, params) => {
+    const rec = asRec(body);
+    const assignment = setExactPlace(
+      db,
+      LOCAL_LIBRARY_ID,
+      params.id ?? "",
+      {
+        placeId: rec.placeId ? String(rec.placeId) : undefined,
+        name: rec.name ? String(rec.name) : undefined,
+        kind: rec.kind ? String(rec.kind) : undefined,
+        parentId: rec.parentId == null ? rec.parentId as null : rec.parentId ? String(rec.parentId) : undefined,
+      },
+      expectedVersion(rec),
+    );
+    json(res, 200, { assignment, atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/items/:id/multiple", async (_req, res, _url, body, params) => {
+    json(res, 200, { assignment: markMultiple(db, LOCAL_LIBRARY_ID, params.id ?? "", expectedVersion(asRec(body))), atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/items/:id/not-atlas", async (_req, res, _url, body, params) => {
+    json(res, 200, { assignment: markNotAtlas(db, LOCAL_LIBRARY_ID, params.id ?? "", expectedVersion(asRec(body))), atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/items/:id/leave", async (_req, res, _url, body, params) => {
+    json(res, 200, { assignment: leaveUnresolved(db, LOCAL_LIBRARY_ID, params.id ?? "", expectedVersion(asRec(body))), atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/items/:id/change", async (_req, res, _url, body, params) => {
+    const rec = asRec(body);
+    json(res, 200, {
+      assignment: changePlace(db, LOCAL_LIBRARY_ID, params.id ?? "", String(rec.placeId ?? ""), expectedVersion(rec)),
+      atlas: presentAtlas(db),
+    });
+  });
+
+  on("POST", "/api/atlas/items/:id/retry", async (_req, res, _url, _body, params) => {
+    retryAtlasAnalysis(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    wakeAtlasWorker(db);
+    json(res, 200, { atlas: presentAtlas(db) });
+  });
+
+  on("POST", "/api/atlas/backfill", async (_req, res) => {
+    const more = backfillAtlas(db, LOCAL_LIBRARY_ID) || backfillTravelAtlas(db, LOCAL_LIBRARY_ID);
+    wakeAtlasWorker(db);
+    json(res, 200, { more, atlas: presentAtlas(db) });
+  });
+
   on("GET", "/api/frame-check", async (_req, res, url) => {
     json(res, 200, { framed: await frameCheck(url.searchParams.get("url") ?? "") });
   });
@@ -405,6 +525,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       await streamRequestToFile(req, tmp, MAX_LIBRARY_ARCHIVE_BYTES);
       const result = await importLibraryArchive(db, tmp);
       wakeReadingWorker(db);
+      wakeAtlasWorker(db);
       json(res, 200, result);
     } finally {
       rmSync(tmp, { force: true });
@@ -612,6 +733,9 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const result = ingestBatch(db, batch, { token: row });
     const urls = batch.changes.flatMap((c) => (c.kind === "upsert" && c.item.url ? [c.item.url] : []));
     if (urls.length) scheduleXEnrich(db, urls);
+    // Screening is durable and capture-owned; wake the local worker after the
+    // batch commit so incremental captures do not wait for session finish.
+    wakeAtlasWorker(db);
     json(res, 200, result);
   });
 
@@ -711,7 +835,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         json(res, 413, { error: error.message });
         return;
       }
-      if (error instanceof LibraryConflict || error instanceof KitchenConflict) {
+      if (error instanceof LibraryConflict || error instanceof KitchenConflict || error instanceof AtlasConflict) {
         json(res, 409, { error: error.message });
         return;
       }
@@ -749,6 +873,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     port: PORT,
     close: async () => {
       stopReadingWorker(db);
+      stopAtlasWorker(db);
       await new Promise<void>((resolve) => server.close(() => resolve()));
       vite?.kill();
     },
@@ -781,6 +906,17 @@ function corsHeaders(req: IncomingMessage, pathname: string): Record<string, str
 function asRec(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== "object") return {};
   return body as Record<string, unknown>;
+}
+
+function expectedVersion(rec: Record<string, unknown>): number {
+  const value = rec.expectedVersion;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new RejectedPayload("expectedVersion required");
+  return value;
+}
+
+function presentAtlas(db: Db) {
+  const atlas = getAtlasProjection(db, LOCAL_LIBRARY_ID);
+  return { ...atlas, analysis: { ...atlas.analysis, ...atlasAiStatus() } };
 }
 
 function parseReadingQuery(url: URL): {

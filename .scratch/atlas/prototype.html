@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Atlas prototype — ReUI kit</title>
+  <!--
+    Throwaway. Mix ReUI patterns on the Atlas page; pick a kit, don't install shadcn yet.
+    Presets A/B/C plus per-slot selects. Slots persist in the URL.
+  -->
+  <style>
+    :root {
+      --paper: #f1f2ef; --card: #fcfdfb; --ink: #17191b; --mute: #6b7176;
+      --rule: #d8dbd5; --wash: #e7e9e4; --accent: #c8352e; --ok: #1a7f4b;
+      --warn: #9a6b00; --bad: #b3362b; --radius: 10px;
+      --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --ui: "Avenir Next", Avenir, "Gill Sans", system-ui, sans-serif;
+      --mono: "SF Mono", "IBM Plex Mono", ui-monospace, Menlo, monospace;
+      --lift: 0 1px 2px rgba(20,24,28,.07), 0 5px 16px rgba(20,24,28,.06);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { color: var(--ink); background: var(--paper); font-family: var(--ui); -webkit-font-smoothing: antialiased; }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    a { color: inherit; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .shell { width: 100%; max-width: 1180px; margin: 0 auto; padding: 30px 26px 140px; }
+    .masthead {
+      display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 18px;
+      border-bottom: 3px double var(--ink); padding-bottom: 16px;
+    }
+    .wordmark { font-family: var(--display); font-size: 54px; line-height: .9; letter-spacing: -.03em; margin: 0; }
+    .wordmark::after { content: "."; color: var(--accent); }
+    .lede { margin: 9px 0 0; color: var(--mute); font-size: 13.5px; }
+    .proto-flag {
+      font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--accent); border: 1px dashed color-mix(in srgb, var(--accent) 50%, var(--rule));
+      border-radius: 999px; padding: 6px 12px;
+    }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--rule); margin-bottom: 18px; flex-wrap: wrap; }
+    .tabs span { color: var(--mute); padding: 13px 14px 11px; border-bottom: 2px solid transparent; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+    .tabs .active { color: var(--ink); border-bottom-color: var(--accent); }
+    .banner { border: 1px dashed var(--rule); background: var(--card); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 16px; color: var(--mute); font-size: 13px; line-height: 1.5; }
+    .banner b { color: var(--ink); }
+    .banner a { color: var(--accent); }
+
+    /* kit */
+    .kit {
+      position: sticky; top: 0; z-index: 40; background: color-mix(in srgb, var(--paper) 94%, transparent);
+      backdrop-filter: blur(8px); border: 1px solid var(--rule); border-radius: 12px;
+      padding: 12px 14px; margin: 0 0 22px; box-shadow: var(--lift);
+    }
+    .kit-h { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 10px; }
+    .kit-h strong { font-family: var(--display); font-size: 18px; font-weight: 500; }
+    .kit-h span { color: var(--mute); font-size: 12px; }
+    .kit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 12px; }
+    .kit label { display: grid; gap: 4px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
+    .kit select, .kit .btn, .search, .btn {
+      border: 1px solid var(--rule); background: var(--card); color: var(--ink);
+      border-radius: 8px; padding: 7px 10px; font-size: 13px; letter-spacing: 0; text-transform: none;
+    }
+    .kit a { font-size: 10px; letter-spacing: .04em; text-transform: none; color: var(--mute); }
+
+    .pagehead { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin: 4px 0 8px; }
+    .pagehead h2 { font-family: var(--display); font-weight: 500; font-size: 34px; letter-spacing: -.02em; margin: 0; }
+    .pagehead .count { color: var(--mute); font-size: 13px; }
+    .pagesub { color: var(--mute); font-size: 13.5px; max-width: 64ch; margin: 0 0 16px; line-height: 1.55; }
+    .atlas-top { display: flex; align-items: flex-start; gap: 22px; }
+    .compass { flex: none; width: 84px; height: 84px; stroke: var(--ink); margin-top: 4px; }
+
+    .btn { color: var(--mute); letter-spacing: .06em; text-transform: uppercase; font-size: 12px; border-radius: 999px; padding: 6px 12px; background: var(--card); border: 1px solid var(--rule); }
+    .btn:hover { border-color: var(--ink); color: var(--ink); }
+    .btn.primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .btn.danger { border-color: color-mix(in srgb, var(--bad) 50%, transparent); color: var(--bad); }
+    .btn.ghost { background: transparent; }
+    .quiet { border: 0; background: none; color: var(--mute); font-size: 11px; padding: 0; letter-spacing: .04em; text-transform: uppercase; }
+    .quiet:hover { color: var(--ink); }
+    .btn-group { display: inline-flex; }
+    .btn-group .btn { border-radius: 0; margin-left: -1px; }
+    .btn-group .btn:first-child { border-radius: 999px 0 0 999px; margin-left: 0; }
+    .btn-group .btn:last-child { border-radius: 0 999px 999px 0; }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; letter-spacing: .06em;
+      text-transform: uppercase; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 8px; color: var(--mute);
+    }
+    .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--rule)); }
+    .badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--rule)); }
+    .badge.solid { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+    .alert {
+      display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+      border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--rule));
+      background: color-mix(in srgb, var(--warn) 8%, var(--card));
+      border-radius: var(--radius); padding: 12px 14px; margin: 0 0 16px;
+    }
+    .alert h3 { margin: 0; font-size: 14px; }
+    .alert p { margin: 4px 0 0; color: var(--mute); font-size: 13px; }
+
+    .needs { border: 1px dashed var(--rule); border-radius: var(--radius); background: var(--card); margin: 0 0 18px; }
+    .needs > summary {
+      cursor: pointer; padding: 13px 17px; color: var(--mute); font-size: 12px; letter-spacing: .12em;
+      text-transform: uppercase; display: flex; align-items: center; gap: 10px; list-style: none;
+    }
+    .needs > summary::-webkit-details-marker { display: none; }
+    .needs > summary::before { content: "+"; color: var(--accent); font-size: 15px; }
+    .needs[open] > summary::before { content: "–"; }
+    .needs .preview { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 12.5px; font-style: italic; }
+    .needs .inner, .stack { padding: 0 12px 14px; display: grid; gap: 10px; }
+
+    .review {
+      display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px;
+      border: 1px solid var(--rule); border-radius: var(--radius); padding: 10px; background: var(--paper);
+    }
+    .review h4, .k-card h4, .row-card h4 { margin: 0; font-family: var(--display); font-size: 18px; font-weight: 500; }
+    .meta { margin: 4px 0 8px; color: var(--mute); font-size: 12px; }
+    .ev { margin: 0 0 6px; font-size: 12.5px; color: var(--mute); }
+    .ev b { color: var(--ink); }
+    .sugg, .row-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+    .home-invite {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      background: var(--card); border: 1px solid var(--rule); border-radius: var(--radius);
+      padding: 10px 14px; margin: 0 0 16px; font-size: 13.5px;
+    }
+    .home-invite span { color: var(--mute); flex: 1; min-width: 16ch; }
+
+    .atlas-nav {
+      position: sticky; top: 72px; z-index: 30; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
+      background: color-mix(in srgb, var(--paper) 92%, transparent); backdrop-filter: blur(6px);
+      border-bottom: 1px solid var(--rule); padding: 10px 0; margin-bottom: 22px;
+    }
+    .atlas-nav button {
+      font: inherit; font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--mute); padding: 5px 11px; border-radius: 999px; border: 1px solid transparent; background: transparent;
+      display: inline-flex; align-items: center; gap: 7px;
+    }
+    .atlas-nav button:hover { color: var(--ink); border-color: var(--rule); background: var(--card); }
+    .sw { width: 8px; height: 8px; border-radius: 50%; background: var(--c, var(--mute)); }
+
+    .region { margin: 0 0 40px; scroll-margin-top: 120px; }
+    .region-head { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 16px; margin-bottom: 6px; }
+    .region-no { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; color: var(--mute); }
+    .region-name { font-family: var(--display); font-size: clamp(28px, 4vw, 42px); font-weight: 500; letter-spacing: -.02em; line-height: 1; margin: 0; }
+    .region-count { font-size: 12px; color: var(--mute); letter-spacing: .1em; text-transform: uppercase; }
+    .region-rule { border: 0; border-top: 2px solid var(--ink); margin: 10px 0 4px; }
+    .region-rule2 { border: 0; border-top: 1px solid var(--rule); margin: 0 0 12px; }
+    .cities { margin: 0 0 16px; font-size: 12px; color: var(--mute); letter-spacing: .06em; }
+    .cities b { color: var(--ink); }
+    .plates { columns: 3 260px; column-gap: 14px; }
+    .place-card {
+      break-inside: avoid; margin: 0 0 14px; background: var(--card);
+      border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px; box-shadow: var(--lift);
+    }
+    .caption { display: flex; align-items: baseline; gap: 8px; padding: 8px 6px 4px; }
+    .cap-text { font-family: var(--display); font-size: 14.5px; line-height: 1.35; min-width: 0; }
+    .cap-text small { display: block; color: var(--mute); font-size: 11px; font-family: var(--mono); margin-top: 2px; }
+    .cap-date { margin-left: auto; flex: none; display: grid; justify-items: end; gap: 4px; }
+    .inferred { font-style: italic; font-size: 10.5px; color: var(--mute); }
+    .poster {
+      aspect-ratio: 4 / 3; background: color-mix(in srgb, var(--c) 82%, #111); color: #f4f1ea;
+      display: grid; place-items: end start; padding: 12px; font-family: var(--display); font-size: 22px;
+      border-radius: 6px; letter-spacing: -.02em;
+    }
+    .poster.mini { aspect-ratio: 1; font-size: 13px; padding: 8px; place-items: center; text-align: center; }
+
+    .acc-dest { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--card); margin: 0 0 10px; }
+    .acc-dest > summary { cursor: pointer; padding: 12px 16px; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+    .acc-dest > summary::-webkit-details-marker { display: none; }
+    .acc-dest .inner { padding: 0 12px 12px; }
+
+    .grid-wrap { overflow: auto; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--card); }
+    table.grid { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    .grid th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+    .grid td { padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+    .filters { display: flex; gap: 6px; margin: 0 0 12px; }
+
+    .kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(240px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+    .kanban-col { background: var(--wash); border-radius: 12px; padding: 10px; min-height: 280px; }
+    .kanban-col h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); display: flex; justify-content: space-between; }
+    .k-card { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 10px; margin: 0 0 8px; }
+
+    .split { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 22px; align-items: start; }
+    .tree { font-size: 14px; }
+    .tree details { padding: 2px 0 2px 8px; }
+    .tree summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 6px; }
+    .tree summary::-webkit-details-marker { display: none; }
+    .tree summary::before { content: "▸"; color: var(--mute); margin-right: 6px; font-size: 11px; }
+    .tree details[open] > summary::before { content: "▾"; }
+    .tree .on { background: var(--card); color: var(--ink); }
+    .tree .n { font-family: var(--mono); font-size: 11px; color: var(--mute); }
+    .tree .leaf { display: flex; justify-content: space-between; padding: 5px 8px 5px 26px; border-radius: 6px; border: 0; background: none; width: 100%; text-align: left; }
+
+    .hover { position: relative; display: inline-flex; }
+    .hover-pop {
+      display: none; position: absolute; right: 0; top: calc(100% + 6px); width: 220px; z-index: 20;
+      background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px;
+      box-shadow: var(--lift); color: var(--mute); font-size: 12px; text-transform: none; letter-spacing: 0; font-style: normal;
+    }
+    .hover:hover .hover-pop, .hover:focus-within .hover-pop { display: block; }
+
+    .empty { text-align: center; padding: 48px 16px; color: var(--mute); border: 1px dashed var(--rule); border-radius: 12px; }
+    .empty h3 { font-family: var(--display); color: var(--ink); font-weight: 500; margin: 0 0 6px; }
+
+    .scrim { position: fixed; inset: 0; background: rgba(23,25,27,.35); z-index: 80; display: grid; place-items: center; padding: 24px; }
+    .scrim.sheet { place-items: stretch end; padding: 0; }
+    .sheet-box, .dialog-box {
+      background: var(--card); border: 1px solid var(--rule); box-shadow: var(--lift); padding: 18px;
+    }
+    .dialog-box { width: min(560px, 100%); border-radius: 14px; }
+    .dialog-box.wide { width: min(780px, 100%); }
+    .sheet-box { width: min(460px, 100%); height: 100%; border-radius: 0; overflow: auto; }
+    .sheet-box h3, .dialog-box h3 { font-family: var(--display); font-size: 24px; font-weight: 500; margin: 0 0 12px; }
+    .search { width: 100%; border-radius: 999px; padding: 10px 16px; margin: 0 0 12px; }
+    .hits { display: grid; gap: 4px; max-height: 260px; overflow: auto; margin: 0 0 12px; }
+    .hits button, .create, .cmd-item {
+      text-align: left; border: 1px solid var(--rule); background: var(--paper); border-radius: 8px; padding: 10px 12px;
+    }
+    .hits button:hover, .create:hover, .cmd-item:hover, .cmd-item.on { border-color: var(--ink); }
+    .path { display: block; color: var(--mute); font-size: 11px; font-family: var(--mono); margin-top: 2px; }
+    .cmd-g { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); padding: 10px 4px 4px; }
+    .casc { display: grid; grid-template-columns: 1fr 1fr 1fr; border: 1px solid var(--rule); border-radius: 10px; min-height: 280px; margin: 0 0 12px; overflow: hidden; }
+    .casc-col { overflow: auto; border-right: 1px solid var(--rule); }
+    .casc-col:last-child { border-right: 0; }
+    .casc-col button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 9px 12px; }
+    .casc-col button.on { background: var(--wash); }
+    .sheet-acts { display: flex; justify-content: flex-end; gap: 8px; }
+
+    .switcher {
+      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 90;
+      display: flex; align-items: center; gap: 8px; background: #17191b; color: #f4f1ea;
+      border-radius: 999px; padding: 8px 10px; box-shadow: 0 8px 28px rgba(20,24,28,.28); font-size: 13px;
+    }
+    .switcher button { width: 32px; height: 32px; border-radius: 999px; border: 1px solid #3a3d41; background: #2a2c30; color: #f4f1ea; }
+    .switcher .lab { min-width: 240px; text-align: center; }
+    .switcher .lab small { display: block; color: #b7bbb6; font-size: 10.5px; }
+    .switcher .reset { width: auto; padding: 0 10px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+    .state {
+      position: fixed; right: 16px; bottom: 18px; z-index: 90; width: 270px;
+      background: #17191b; color: #c9cdc8; border-radius: 10px; padding: 10px 12px;
+      font-family: var(--mono); font-size: 10.5px; line-height: 1.45; max-height: 42vh; overflow: auto;
+    }
+    .state b { color: #f4f1ea; }
+    @media (max-width: 860px) {
+      .review, .split, .casc { grid-template-columns: 1fr; }
+      .plates { columns: 1; }
+      .state { display: none; }
+      .region-head { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div>
+        <h1 class="wordmark">Locus</h1>
+        <p class="lede">Throwaway Atlas kit. ReUI patterns, Locus tokens. Not installed in the app.</p>
+      </div>
+      <div class="proto-flag">Prototype</div>
+    </header>
+    <nav class="tabs"><span>Desk</span><span>Kitchen</span><span class="active">Atlas</span><span>Reading</span><span>Sources</span></nav>
+    <p class="banner">
+      ReUI is copy-paste <a href="https://reui.io/components" target="_blank" rel="noreferrer">shadcn layouts</a>, not a Locus dependency yet.
+      Pick a piece per slot. Gantt, calendar, upload, charts, OTP, and rating are skipped — they don’t map to Places.
+    </p>
+    <div class="kit" id="kit"></div>
+    <div id="app"></div>
+  </div>
+  <div id="picker"></div>
+  <div class="switcher" role="navigation" aria-label="Presets">
+    <button type="button" data-act="prev" aria-label="Previous preset">←</button>
+    <div class="lab" id="switch-lab"></div>
+    <button type="button" data-act="next" aria-label="Next preset">→</button>
+    <button type="button" class="reset" data-act="reset">Reset data</button>
+  </div>
+  <pre class="state" id="state"></pre>
+  <script>
+    const SLOTS = {
+      needs: {
+        label: "Needs a place",
+        href: "https://reui.io/components/accordion",
+        options: {
+          accordion: "Accordion",
+          alert: "Alert",
+          cards: "Cards",
+          kanban: "Kanban column",
+        },
+      },
+      picker: {
+        label: "Place picker",
+        href: "https://reui.io/components/combobox",
+        options: {
+          combobox: "Combobox",
+          command: "Command",
+          cascader: "Cascader",
+          tree: "Tree",
+        },
+      },
+      shell: {
+        label: "Picker shell",
+        href: "https://reui.io/components/dialog",
+        options: { dialog: "Dialog", sheet: "Sheet" },
+      },
+      dest: {
+        label: "Destinations",
+        href: "https://reui.io/components/card",
+        options: {
+          cards: "Cards",
+          accordion: "Accordion",
+          grid: "Data grid",
+          kanban: "Kanban",
+          tree: "Tree",
+        },
+      },
+      actions: {
+        label: "Review actions",
+        href: "https://reui.io/components/button-group",
+        options: { buttons: "Buttons", group: "Button group", select: "Select" },
+      },
+      inferred: {
+        label: "Inferred mark",
+        href: "https://reui.io/components/badge",
+        options: { quiet: "Quiet text", badge: "Badge", hover: "Hover card" },
+      },
+      home: {
+        label: "Home base",
+        href: "https://reui.io/components/alert",
+        options: { alert: "Alert", combobox: "Combobox", badge: "Badge" },
+      },
+    };
+    const PRESETS = {
+      A: { name: "Spec — plates", needs: "accordion", picker: "combobox", shell: "dialog", dest: "cards", actions: "buttons", inferred: "quiet", home: "alert" },
+      B: { name: "Operator — grid", needs: "alert", picker: "command", shell: "dialog", dest: "grid", actions: "group", inferred: "badge", home: "combobox" },
+      C: { name: "Board — kanban", needs: "kanban", picker: "cascader", shell: "sheet", dest: "kanban", actions: "group", inferred: "hover", home: "badge" },
+    };
+    const KEYS = Object.keys(PRESETS);
+    const PALETTE = ["#c8352e", "#3a4fb5", "#1e7a5f", "#9a4a2a", "#2a6f8f", "#6d4a9c", "#8a5a12"];
+    const ROMAN = ["I", "II", "III", "IV", "V", "VI"];
+    const KIND_GROUP = { country: "Countries", city: "Cities", administrative: "Regions", venue: "Venues", natural: "Natural areas" };
+
+    const SEED_PLACES = {
+      india: { id: "india", name: "India", kind: "country" },
+      bengaluru: { id: "bengaluru", name: "Bengaluru", kind: "city", parent: "india" },
+      dharamshala: { id: "dharamshala", name: "Dharamshala", kind: "city", parent: "india" },
+      mumbai: { id: "mumbai", name: "Mumbai", kind: "city", parent: "india" },
+      philippines: { id: "philippines", name: "Philippines", kind: "country" },
+      palawan: { id: "palawan", name: "Palawan", kind: "administrative", parent: "philippines" },
+      japan: { id: "japan", name: "Japan", kind: "country" },
+      kyoto: { id: "kyoto", name: "Kyoto", kind: "city", parent: "japan" },
+      osaka: { id: "osaka", name: "Osaka", kind: "city", parent: "japan" },
+      italy: { id: "italy", name: "Italy", kind: "country" },
+      rome: { id: "rome", name: "Rome", kind: "city", parent: "italy" },
+      dolomites: { id: "dolomites", name: "Dolomites", kind: "natural", parent: "italy" },
+      netherlands: { id: "netherlands", name: "Netherlands", kind: "country" },
+      amsterdam: { id: "amsterdam", name: "Amsterdam", kind: "city", parent: "netherlands" },
+      china: { id: "china", name: "China", kind: "country" },
+      qingdao: { id: "qingdao", name: "Qingdao", kind: "city", parent: "china" },
+      vietnam: { id: "vietnam", name: "Vietnam", kind: "country" },
+      portugal: { id: "portugal", name: "Portugal", kind: "country" },
+      toit: { id: "toit", name: "Toit Brewpub", kind: "venue", parent: "bengaluru" },
+    };
+    const SEED_ITEMS = [
+      { id: "ph", title: "Island hopping the Philippines", who: "travelwithria", host: "instagram", tag: "Travel", word: "Palawan", outcome: "needs_place", actor: "analyzer", primary: null, suggestions: [
+        { placeId: "philippines", role: "primary", quote: "Island hopping the Philippines" },
+        { placeId: "india", role: "mentioned", quote: "for Indian travelers" },
+        { placeId: "mumbai", role: "mentioned", quote: "flying out of Mumbai" },
+      ]},
+      { id: "dhram", title: "Triund trek from Dhramshala", who: "himalayan.walks", host: "instagram", tag: "Travel", word: "Triund", outcome: "needs_place", actor: "analyzer", primary: null, suggestions: [
+        { placeId: "dharamshala", role: "primary", quote: "Dhramshala" },
+      ]},
+      { id: "rome", title: "Rome in 48 hours", who: "caffelungo", host: "youtube", tag: "Travel", word: "Rome", outcome: "needs_place", actor: "analyzer", primary: null, suggestions: [
+        { placeId: "rome", role: "primary", quote: "Rome in 48 hours" },
+        { placeId: "italy", role: "primary", quote: "Italy, if you only have a weekend" },
+      ]},
+      { id: "qing", title: "Qingdao beer streets", who: "north.pacific", host: "x", tag: "Travel", word: "Qingdao", outcome: "needs_place", actor: "analyzer", primary: null, suggestions: [] },
+      { id: "japan", title: "Two weeks, Kyoto to Osaka", who: "rail.notes", host: "x", tag: "Travel", word: "Japan", outcome: "placed", actor: "analyzer", primary: "japan", contained: ["kyoto", "osaka"] },
+      { id: "toit", title: "Saturday at Toit", who: "eat.blr", host: "instagram", tag: "Food", word: "Toit", outcome: "placed", actor: "user", primary: "toit" },
+      { id: "round", title: "One bag, three countries", who: "slow.tickets", host: "youtube", tag: "Travel", word: "Roundup", outcome: "multiple", actor: "analyzer", primary: null, peers: ["japan", "vietnam", "portugal"] },
+      { id: "ams", title: "Canal bikes and bitterballen", who: "low.skies", host: "instagram", tag: "Travel", word: "Amsterdam", outcome: "placed", actor: "analyzer", primary: "amsterdam" },
+      { id: "dolo", title: "Alta Via without a plan", who: "high.pass", host: "youtube", tag: "Travel", word: "Alta Via", outcome: "placed", actor: "analyzer", primary: "italy", contained: ["dolomites"] },
+    ];
+
+    let places, items, homeBase, needsOpen, selectedNode, actorFilter, picker, lastAction, reviewOpen;
+
+    function reset(action = "reset") {
+      places = structuredClone(SEED_PLACES);
+      items = structuredClone(SEED_ITEMS);
+      homeBase = null;
+      needsOpen = false;
+      reviewOpen = false;
+      selectedNode = "needs";
+      actorFilter = "all";
+      picker = null;
+      lastAction = action;
+    }
+
+    function esc(s) {
+      return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function colorOf(id) {
+      let h = 0;
+      for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+      return PALETTE[h % PALETTE.length];
+    }
+    function chain(id) {
+      const out = [];
+      let p = places[id];
+      const seen = new Set();
+      while (p && !seen.has(p.id)) {
+        seen.add(p.id);
+        out.push(p);
+        p = p.parent ? places[p.parent] : null;
+      }
+      return out;
+    }
+    function pathOf(id) { return chain(id).map((p) => p.name).join(" · "); }
+    function isUnder(id, root) { return chain(id).some((p) => p.id === root); }
+    function countryOf(id) { return chain(id).find((p) => p.kind === "country") || places[id]; }
+    function childrenOf(id) { return Object.values(places).filter((p) => p.parent === id); }
+    function roots() { return Object.values(places).filter((p) => !p.parent); }
+
+    function params() { return new URLSearchParams(location.search); }
+    function kit() {
+      const q = params();
+      const presetKey = (q.get("preset") || "").toUpperCase();
+      const base = { ...(PRESETS[presetKey] || PRESETS.A) };
+      for (const slot of Object.keys(SLOTS)) {
+        const v = q.get(slot);
+        if (v && SLOTS[slot].options[v]) base[slot] = v;
+      }
+      base.preset = PRESETS[presetKey] ? presetKey : matchPreset(base) || "A";
+      return base;
+    }
+    function matchPreset(k) {
+      return KEYS.find((key) => Object.keys(SLOTS).every((s) => PRESETS[key][s] === k[s]));
+    }
+    function setParams(next, dropPreset) {
+      const url = new URL(location.href);
+      const q = url.searchParams;
+      if (next.preset) {
+        [...q.keys()].forEach((k) => q.delete(k));
+        q.set("preset", next.preset);
+      } else {
+        const merged = { ...kit(), ...next };
+        delete merged.name;
+        delete merged.preset;
+        Object.entries(merged).forEach(([k, v]) => q.set(k, v));
+        if (dropPreset) q.delete("preset");
+        const matched = matchPreset(merged);
+        if (matched) {
+          [...q.keys()].forEach((k) => q.delete(k));
+          q.set("preset", matched);
+        }
+      }
+      history.replaceState(null, "", url);
+      render();
+    }
+
+    function projection() {
+      const needs = items.filter((i) => i.outcome === "needs_place");
+      const multiple = items.filter((i) => i.outcome === "multiple");
+      const around = [];
+      const groups = new Map();
+      for (const it of items.filter((i) => i.outcome === "placed")) {
+        if (homeBase && isUnder(it.primary, homeBase)) {
+          around.push(it);
+          continue;
+        }
+        const g = countryOf(it.primary);
+        if (!g) continue;
+        if (!groups.has(g.id)) groups.set(g.id, { place: g, items: [] });
+        groups.get(g.id).items.push(it);
+      }
+      const dests = [...groups.values()].sort((a, b) => a.place.name.localeCompare(b.place.name));
+      return {
+        needs, multiple, around, dests,
+        home: homeBase ? places[homeBase] : null,
+        placedCount: items.filter((i) => i.outcome === "placed").length,
+        visible: items.filter((i) => i.outcome !== "not_atlas").length,
+      };
+    }
+    function citiesOf(list) {
+      const names = []; const seen = new Set();
+      const add = (id) => {
+        const p = places[id];
+        if (!p || p.kind === "country" || seen.has(p.id)) return;
+        seen.add(p.id); names.push(p.name);
+      };
+      for (const it of list) {
+        add(it.primary);
+        for (const c of it.contained || []) add(c);
+      }
+      return names;
+    }
+
+    function accept(itemId, placeId) {
+      const it = items.find((i) => i.id === itemId);
+      if (!it || !places[placeId]) return;
+      it.outcome = "placed"; it.actor = "user"; it.primary = placeId; it.suggestions = [];
+      lastAction = `${it.title} → ${places[placeId].name}`;
+      picker = null; render();
+    }
+    function markMulti(itemId) {
+      const it = items.find((i) => i.id === itemId);
+      it.outcome = "multiple"; it.actor = "user"; it.primary = null;
+      it.peers = (it.suggestions || []).map((s) => s.placeId);
+      lastAction = `${it.title} → Multiple destinations`;
+      picker = null; render();
+    }
+    function markNot(itemId) {
+      const it = items.find((i) => i.id === itemId);
+      it.outcome = "not_atlas"; it.actor = "user";
+      lastAction = `${it.title} → Not for Atlas`;
+      picker = null; render();
+    }
+    function setHome(id) {
+      homeBase = id; lastAction = `home base → ${places[id].name}`; picker = null; render();
+    }
+    function createPlace(name, parent) {
+      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "place-" + Date.now();
+      if (!places[id]) places[id] = { id, name, kind: "venue", parent: parent || undefined };
+      return id;
+    }
+
+    function poster(word, id, mini) {
+      return `<div class="poster${mini ? " mini" : ""}" style="--c:${colorOf(id)}">${esc(word)}</div>`;
+    }
+    function inferredMark(it) {
+      if (it.actor !== "analyzer") return "";
+      const k = kit();
+      if (k.inferred === "badge") return `<span class="badge warn">Inferred</span>`;
+      if (k.inferred === "hover") return `<span class="hover"><span class="badge warn">Inferred</span><div class="hover-pop">Analyzer placed this. Evidence stays; Change place is authoritative.</div></span>`;
+      return `<em class="inferred">inferred</em>`;
+    }
+    function extraActs(it) {
+      return `<button class="btn" data-act="pick" data-item="${it.id}">Choose exact place</button>
+        <button class="btn" data-act="multi" data-item="${it.id}">Multiple destinations</button>
+        <button class="btn danger" data-act="not" data-item="${it.id}">Not for Atlas</button>`;
+    }
+    function actionBar(it) {
+      const k = kit();
+      const sugg = it.suggestions || [];
+      if (k.actions === "select") {
+        return `<select data-act="pick-sugg" data-item="${it.id}">
+          <option value="">Place as…</option>
+          ${sugg.map((s) => `<option value="${s.placeId}">${esc(places[s.placeId].name)} (${esc(s.role)})</option>`).join("")}
+        </select>
+        <div class="row-acts">${extraActs(it)}</div>`;
+      }
+      const btns = sugg.map((s) => `<button class="btn primary" data-act="accept" data-item="${it.id}" data-place="${s.placeId}">${esc(places[s.placeId].name)}</button>`).join("");
+      if (k.actions === "group") return `<div class="sugg"><div class="btn-group">${btns}</div></div><div class="row-acts">${extraActs(it)}</div>`;
+      return `<div class="sugg">${btns}</div><div class="row-acts">${extraActs(it)}</div>`;
+    }
+    function evidence(it) {
+      const sugg = it.suggestions || [];
+      if (!sugg.length) return `<p class="ev">No supported destination evidence. Choose exact place.</p>`;
+      return sugg.map((s) => `<p class="ev">“${esc(s.quote)}” · ${esc(s.role)} → <b>${esc(places[s.placeId].name)}</b></p>`).join("");
+    }
+    function reviewRow(it) {
+      return `<article class="review">${poster(it.word, it.id, true)}<div>
+        <h4>${esc(it.title)}</h4>
+        <p class="meta">${esc(it.who)} · ${esc(it.tag)} · ${esc(it.host)}</p>
+        ${evidence(it)}${actionBar(it)}
+      </div></article>`;
+    }
+    function placeCard(it) {
+      const p = places[it.primary] || { name: it.word, id: it.id };
+      const extra = (it.contained || []).map((id) => places[id].name).join(" · ");
+      return `<article class="place-card">${poster(p.name, it.primary || it.id)}
+        <div class="caption">
+          <span class="cap-text">${esc(it.title)}<small>${esc(it.who)}${extra ? " · " + esc(extra) : ""}</small></span>
+          <span class="cap-date">${inferredMark(it)}<button class="quiet" data-act="pick" data-item="${it.id}">Change place</button></span>
+        </div>
+      </article>`;
+    }
+    function kCard(it, review) {
+      if (review) {
+        return `<article class="k-card"><h4>${esc(it.title)}</h4><p class="meta">${esc(it.who)}</p>${evidence(it)}${actionBar(it)}</article>`;
+      }
+      const where = it.outcome === "multiple" ? "Multiple" : pathOf(it.primary);
+      return `<article class="k-card"><h4>${esc(it.title)}</h4><p class="meta">${esc(where)}</p>
+        ${inferredMark(it)} <button class="quiet" data-act="pick" data-item="${it.id}">Change place</button></article>`;
+    }
+
+    function homeBlock(p) {
+      const k = kit();
+      if (p.home) {
+        if (k.home === "badge") return `<div class="home-invite"><span class="badge ok solid" data-act="pick-home" role="button">Home · ${esc(p.home.name)}</span><span>Around ${esc(p.home.name)} is a projection. Changing home does not retag Items.</span></div>`;
+        if (k.home === "combobox") return `<div class="home-invite"><span>Home base</span><button class="btn" data-act="pick-home">${esc(p.home.name)} ▾</button></div>`;
+        return "";
+      }
+      if (k.home === "badge") return `<div class="home-invite"><button class="badge warn" data-act="pick-home">Home unset</button><span>Destinations still work.</span></div>`;
+      if (k.home === "combobox") return `<div class="home-invite"><span>Home base</span><button class="btn" data-act="pick-home">Choose…</button><button class="btn primary" data-act="home" data-place="bengaluru">Bengaluru</button></div>`;
+      return `<div class="alert"><div><h3>No home base</h3><p>Destinations still work — local saves wait for a city.</p></div>
+        <div class="row-acts"><button class="btn primary" data-act="home" data-place="bengaluru">Use Bengaluru</button>
+        <button class="btn" data-act="pick-home">Choose exact</button></div></div>`;
+    }
+
+    function needsBlock(p) {
+      const k = kit();
+      if (!p.needs.length || k.dest === "kanban" || k.dest === "tree") return "";
+      const preview = p.needs.slice(0, 3).map((i) => i.title.split(" ").slice(0, 3).join(" ")).join(" · ");
+      if (k.needs === "alert") {
+        return `<div class="alert"><div><h3>Needs a place · ${p.needs.length}</h3><p>${esc(preview)}</p></div>
+          <button class="btn" data-act="toggle-review">${reviewOpen ? "Hide" : "Review"}</button></div>
+          ${reviewOpen ? `<div class="stack">${p.needs.map(reviewRow).join("")}</div>` : ""}`;
+      }
+      if (k.needs === "cards" || k.needs === "kanban") {
+        return `<div class="stack" style="margin-bottom:18px"><h3 class="region-name" style="font-size:22px">Needs a place</h3>${p.needs.map(reviewRow).join("")}</div>`;
+      }
+      return `<details class="needs" ${needsOpen ? "open" : ""}>
+        <summary>Needs a place · ${p.needs.length}<span class="preview">${esc(preview)}</span></summary>
+        <div class="inner">${p.needs.map(reviewRow).join("")}</div>
+      </details>`;
+    }
+
+    function regionBlock(title, list, i, id) {
+      if (!list.length) return "";
+      const cities = citiesOf(list);
+      return `<div class="region" id="${id}">
+        <div class="region-head">
+          <span class="region-no">${i == null ? "HOME" : "PLATE " + (ROMAN[i] || i + 1)}</span>
+          <h3 class="region-name">${esc(title)}</h3>
+          <span class="region-count">${list.length} save${list.length === 1 ? "" : "s"}</span>
+        </div>
+        <hr class="region-rule"/><hr class="region-rule2"/>
+        ${cities.length ? `<div class="cities">Contained — ${cities.map((c) => `<b>${esc(c)}</b>`).join(" · ")}</div>` : ""}
+        <div class="plates">${list.map(placeCard).join("")}</div>
+      </div>`;
+    }
+
+    function destCards(p) {
+      const nav = [
+        p.home && p.around.length ? `<button type="button" data-act="jump" data-id="around"><span class="sw" style="--c:${colorOf(p.home.id)}"></span>Around</button>` : "",
+        ...p.dests.map((d) => `<button type="button" data-act="jump" data-id="${d.place.id}"><span class="sw" style="--c:${colorOf(d.place.id)}"></span>${esc(d.place.name)}</button>`),
+        p.multiple.length ? `<button type="button" data-act="jump" data-id="multiple">Multiple · ${p.multiple.length}</button>` : "",
+      ].join("");
+      const multiCards = p.multiple.map((it) => ({ ...it, primary: it.peers?.[0] || it.id }));
+      return `${nav ? `<nav class="atlas-nav">${nav}</nav>` : ""}
+        ${p.home ? regionBlock("Around " + p.home.name, p.around, null, "around") : ""}
+        ${p.dests.map((d, i) => regionBlock(d.place.name, d.items, i, d.place.id)).join("")}
+        ${regionBlock("Multiple destinations", multiCards, p.dests.length, "multiple")}`;
+    }
+
+    function destAccordion(p) {
+      const blocks = [];
+      if (p.home && p.around.length) blocks.push(["Around " + p.home.name, p.around]);
+      for (const d of p.dests) blocks.push([d.place.name, d.items]);
+      if (p.multiple.length) blocks.push(["Multiple destinations", p.multiple.map((it) => ({ ...it, primary: it.peers?.[0] || it.id }))]);
+      return blocks.map(([title, list], i) => `<details class="acc-dest" ${i === 0 ? "open" : ""}>
+        <summary><b>${esc(title)}</b><span class="badge">${list.length}</span></summary>
+        <div class="inner"><div class="plates">${list.map(placeCard).join("")}</div></div>
+      </details>`).join("");
+    }
+
+    function destGrid(p) {
+      let rows = [
+        ...p.around.map((it) => ({ it, place: "Around " + (p.home?.name || "") })),
+        ...p.dests.flatMap((d) => d.items.map((it) => ({ it, place: d.place.name }))),
+        ...p.multiple.map((it) => ({ it, place: "Multiple" })),
+      ];
+      if (actorFilter !== "all") rows = rows.filter((r) => r.it.actor === actorFilter);
+      return `<div class="filters">
+          <div class="btn-group">
+            <button class="btn ${actorFilter === "all" ? "primary" : ""}" data-act="filter" data-id="all">All</button>
+            <button class="btn ${actorFilter === "analyzer" ? "primary" : ""}" data-act="filter" data-id="analyzer">Inferred</button>
+            <button class="btn ${actorFilter === "user" ? "primary" : ""}" data-act="filter" data-id="user">Confirmed</button>
+          </div>
+        </div>
+        <div class="grid-wrap"><table class="grid">
+          <thead><tr><th>Item</th><th>Place</th><th>Actor</th><th>Contained</th><th></th></tr></thead>
+          <tbody>${rows.map(({ it, place }) => `<tr>
+            <td><b>${esc(it.title)}</b><div class="meta" style="margin:2px 0 0">${esc(it.who)} · ${esc(it.tag)}</div></td>
+            <td>${esc(place)}</td>
+            <td>${inferredMark(it) || `<span class="badge ok">User</span>`}</td>
+            <td>${esc((it.contained || []).map((id) => places[id].name).join(" · ") || "—")}</td>
+            <td><button class="quiet" data-act="pick" data-item="${it.id}">Change place</button></td>
+          </tr>`).join("") || `<tr><td colspan="5">No rows.</td></tr>`}</tbody>
+        </table></div>`;
+    }
+
+    function destKanban(p) {
+      const cols = [];
+      if (p.needs.length) cols.push(["Needs a place", p.needs, true]);
+      if (p.home) cols.push(["Around " + p.home.name, p.around, false]);
+      for (const d of p.dests) cols.push([d.place.name, d.items, false]);
+      if (p.multiple.length) cols.push(["Multiple destinations", p.multiple, false]);
+      return `<div class="kanban">${cols.map(([title, list, review]) => `<section class="kanban-col">
+        <h3>${esc(title)}<span class="n">${list.length}</span></h3>
+        ${list.map((it) => kCard(it, review)).join("") || `<p class="meta">Empty</p>`}
+      </section>`).join("")}</div>`;
+    }
+
+    function destTree(p) {
+      const countUnder = (id) => items.filter((it) => it.outcome === "placed" && it.primary && isUnder(it.primary, id) && !(homeBase && isUnder(it.primary, homeBase) && id !== homeBase)).length;
+      const node = (pl, open) => {
+        const kids = childrenOf(pl.id);
+        const n = countUnder(pl.id);
+        if (!kids.length) return `<button class="leaf ${selectedNode === pl.id ? "on" : ""}" data-act="sel" data-id="${pl.id}">${esc(pl.name)}<span class="n">${n}</span></button>`;
+        return `<details ${open ? "open" : ""}><summary class="${selectedNode === pl.id ? "on" : ""}" data-act="sel" data-id="${pl.id}">${esc(pl.name)}<span class="n">${n}</span></summary>${kids.map((k) => node(k, false)).join("")}</details>`;
+      };
+      const tree = `<nav class="tree">
+        ${p.needs.length ? `<button class="leaf ${selectedNode === "needs" ? "on" : ""}" data-act="sel" data-id="needs">Needs a place<span class="n">${p.needs.length}</span></button>` : ""}
+        ${p.home ? `<button class="leaf ${selectedNode === "around" ? "on" : ""}" data-act="sel" data-id="around">Around ${esc(p.home.name)}<span class="n">${p.around.length}</span></button>` : ""}
+        ${p.multiple.length ? `<button class="leaf ${selectedNode === "multiple" ? "on" : ""}" data-act="sel" data-id="multiple">Multiple<span class="n">${p.multiple.length}</span></button>` : ""}
+        ${roots().map((r) => node(r, r.kind === "country")).join("")}
+      </nav>`;
+      let main = "";
+      if (selectedNode === "needs") main = p.needs.map(reviewRow).join("") || `<div class="empty"><h3>Clear</h3><p>Nothing needs a place.</p></div>`;
+      else if (selectedNode === "around") main = `<div class="plates">${p.around.map(placeCard).join("")}</div>` || "";
+      else if (selectedNode === "multiple") main = p.multiple.map((it) => kCard(it, false)).join("");
+      else {
+        const list = items.filter((it) => it.outcome === "placed" && it.primary && isUnder(it.primary, selectedNode) && !(homeBase && isUnder(it.primary, homeBase)));
+        main = list.length ? `<div class="plates">${list.map(placeCard).join("")}</div>` : `<div class="empty"><h3>${esc(places[selectedNode]?.name || "Place")}</h3><p>No items whose primary sits here.</p></div>`;
+      }
+      return `<div class="split">${tree}<div>${main}</div></div>`;
+    }
+
+    function compass() {
+      return `<svg class="compass" viewBox="0 0 100 100" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="50" cy="50" r="46"/><circle cx="50" cy="50" r="34" stroke-width="1"/>
+        <path d="M50 12v10M50 78v10M12 50h10M78 50h10"/>
+        <path d="M50 26 58 50 50 74 42 50 Z" fill="var(--accent)" stroke="none"/>
+        <path d="M26 50 50 42 74 50 50 58 Z" stroke-width="1.4"/>
+      </svg>`;
+    }
+
+    function view(p) {
+      const k = kit();
+      const dest = k.dest === "accordion" ? destAccordion(p)
+        : k.dest === "grid" ? destGrid(p)
+        : k.dest === "kanban" ? destKanban(p)
+        : k.dest === "tree" ? destTree(p)
+        : destCards(p);
+      const empty = !p.visible ? `<div class="empty"><h3>No places yet</h3><p>Save something visitable and it will land here.</p></div>` : dest;
+      return `<div class="atlas-top">${compass()}<div style="flex:1">
+        <div class="pagehead"><h2>Atlas</h2><span class="count">${p.visible} saves</span></div>
+        <p class="pagesub">Saved places. One card each. Corrections stick.</p>
+      </div></div>
+      ${homeBlock(p)}
+      ${needsBlock(p)}
+      ${empty}`;
+    }
+
+    function groupedHits(q) {
+      const query = (q || "").toLowerCase();
+      const list = Object.values(places).filter((p) => !query || p.name.toLowerCase().includes(query) || pathOf(p.id).toLowerCase().includes(query));
+      const groups = {};
+      for (const p of list) {
+        const g = KIND_GROUP[p.kind] || "Places";
+        (groups[g] ||= []).push(p);
+      }
+      return groups;
+    }
+    function hitButton(p, act, itemId) {
+      return `<button type="button" class="cmd-item" data-act="${act}" data-item="${itemId || ""}" data-place="${p.id}">${esc(p.name)}<span class="path">${esc(pathOf(p.id))} · ${esc(p.kind)}</span></button>`;
+    }
+
+    function pickerBody() {
+      if (!picker) return "";
+      const k = kit();
+      const q = picker.q || "";
+      const act = picker.mode === "home" ? "home" : "accept";
+      const itemId = picker.itemId || "";
+      if (k.picker === "cascader") {
+        const col1 = roots();
+        const col2 = picker.col1 ? childrenOf(picker.col1) : [];
+        const col3 = picker.col2 ? childrenOf(picker.col2) : [];
+        const col = (list, key, selected) => list.map((p) => {
+          const kids = childrenOf(p.id);
+          const pick = kids.length ? `data-act="casc" data-key="${key}" data-place="${p.id}"` : `data-act="${act}" data-item="${itemId}" data-place="${p.id}"`;
+          return `<button type="button" class="${selected === p.id ? "on" : ""}" ${pick}>${esc(p.name)}${kids.length ? " ›" : ""}</button>`;
+        }).join("") || `<p class="ev" style="padding:12px">None</p>`;
+        return `<div class="casc">
+          <div class="casc-col">${col(col1, "col1", picker.col1)}</div>
+          <div class="casc-col">${col(col2, "col2", picker.col2)}</div>
+          <div class="casc-col">${col(col3, "col3", picker.col3)}</div>
+        </div>
+        ${picker.col1 ? `<button class="create" data-act="${act}" data-item="${itemId}" data-place="${picker.col2 || picker.col1}">Use ${esc(places[picker.col2 || picker.col1].name)}</button>` : ""}`;
+      }
+      if (k.picker === "tree") {
+        const node = (pl) => {
+          const kids = childrenOf(pl.id);
+          const btn = `<button class="leaf" data-act="${act}" data-item="${itemId}" data-place="${pl.id}">${esc(pl.name)}<span class="path">${esc(pl.kind)}</span></button>`;
+          if (!kids.length) return btn;
+          return `<details open><summary>${esc(pl.name)}</summary>${btn}${kids.map(node).join("")}</details>`;
+        };
+        return `<div class="tree" style="border:1px solid var(--rule);border-radius:10px;padding:8px;max-height:320px;overflow:auto">${roots().map(node).join("")}</div>`;
+      }
+      if (k.picker === "command") {
+        const groups = groupedHits(q);
+        return `<input class="search" id="pq" value="${esc(q)}" placeholder="Search places…" />
+          <div class="hits">${Object.entries(groups).map(([g, list]) => `<div class="cmd-g">${esc(g)}</div>${list.map((p) => hitButton(p, act, itemId)).join("")}`).join("") || `<p class="ev">No matches.</p>`}</div>`;
+      }
+      const list = Object.values(places).filter((p) => p.name.toLowerCase().includes(q.toLowerCase()));
+      return `<input class="search" id="pq" value="${esc(q)}" placeholder="Search Library places" />
+        <div class="hits">${list.slice(0, 8).map((p) => hitButton(p, act, itemId)).join("") || `<p class="ev">No known Place matches.</p>`}</div>`;
+    }
+
+    function renderPicker() {
+      const el = document.getElementById("picker");
+      if (!picker) { el.innerHTML = ""; return; }
+      const k = kit();
+      const title = picker.mode === "home" ? "Home base" : "Exact place";
+      const q = picker.q || "";
+      const wide = k.picker === "cascader" ? " wide" : "";
+      const inner = `<h3>${title}</h3>
+        ${pickerBody()}
+        ${q.trim() && k.picker !== "cascader" ? `<button class="create" type="button" data-act="create" data-item="${picker.itemId || ""}" data-name="${esc(q.trim())}">Create “${esc(q.trim())}”${homeBase ? " under " + esc(places[homeBase].name) : ""}</button>` : ""}
+        <div class="sheet-acts"><button class="btn" data-act="close">Cancel</button></div>`;
+      if (k.shell === "sheet") {
+        el.innerHTML = `<div class="scrim sheet" data-act="close"><div class="sheet-box" data-stop="1">${inner}</div></div>`;
+      } else {
+        el.innerHTML = `<div class="scrim" data-act="close"><div class="dialog-box${wide}" data-stop="1">${inner}</div></div>`;
+      }
+      const input = document.getElementById("pq");
+      if (input) {
+        input.focus();
+        input.selectionStart = input.value.length;
+        input.oninput = () => { picker.q = input.value; renderPicker(); };
+      }
+    }
+
+    function renderKit() {
+      const k = kit();
+      document.getElementById("kit").innerHTML = `<div class="kit-h">
+        <strong>ReUI kit</strong>
+        <span>Each control is a real catalog page. Mix freely; presets are starting points.</span>
+      </div>
+      <div class="kit-grid">${Object.entries(SLOTS).map(([slot, meta]) => `<label>${esc(meta.label)}
+        <select data-slot="${slot}">${Object.entries(meta.options).map(([v, label]) => `<option value="${v}" ${k[slot] === v ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
+        <a href="${meta.href}" target="_blank" rel="noreferrer">reui.io</a>
+      </label>`).join("")}</div>`;
+    }
+
+    function render() {
+      const k = kit();
+      const p = projection();
+      renderKit();
+      document.getElementById("app").innerHTML = view(p);
+      const presetName = PRESETS[k.preset]?.name || "Custom";
+      document.getElementById("switch-lab").innerHTML = `${k.preset} — ${esc(presetName)}<small>← → presets · kit above mixes pieces</small>`;
+      document.getElementById("state").textContent =
+        `kit: needs=${k.needs} picker=${k.picker} shell=${k.shell}\n     dest=${k.dest} actions=${k.actions} inferred=${k.inferred} home=${k.home}\nlast: ${lastAction}\nhome: ${homeBase || "(none)"}\nneeds ${p.needs.length}  placed ${p.placedCount}  multiple ${p.multiple.length}\n` +
+        items.map((i) => `${i.id}: ${i.outcome}${i.primary ? " @" + i.primary : ""} [${i.actor}]`).join("\n");
+      renderPicker();
+      const details = document.querySelector("details.needs");
+      if (details) details.addEventListener("toggle", () => { needsOpen = details.open; });
+    }
+
+    function onAct(act, t) {
+      const itemId = t.dataset.item;
+      const placeId = t.dataset.place;
+      if (act === "prev") setParams({ preset: KEYS[(KEYS.indexOf(kit().preset) + KEYS.length - 1) % KEYS.length] });
+      else if (act === "next") setParams({ preset: KEYS[(KEYS.indexOf(kit().preset) + 1) % KEYS.length] });
+      else if (act === "reset") { reset("reset"); render(); }
+      else if (act === "accept") accept(itemId, placeId);
+      else if (act === "multi") markMulti(itemId);
+      else if (act === "not") markNot(itemId);
+      else if (act === "home") setHome(placeId);
+      else if (act === "pick") { picker = { mode: "place", itemId, q: "", col1: null, col2: null }; renderPicker(); }
+      else if (act === "pick-home") { picker = { mode: "home", q: "", col1: null, col2: null }; renderPicker(); }
+      else if (act === "create") {
+        const id = createPlace(t.dataset.name, homeBase);
+        if (picker?.mode === "home") setHome(id); else accept(itemId, id);
+      }
+      else if (act === "close") { picker = null; renderPicker(); }
+      else if (act === "jump") document.getElementById(t.dataset.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      else if (act === "sel") { selectedNode = t.dataset.id; render(); }
+      else if (act === "filter") { actorFilter = t.dataset.id; render(); }
+      else if (act === "toggle-review") { reviewOpen = !reviewOpen; render(); }
+      else if (act === "casc") {
+        picker[t.dataset.key] = t.dataset.place;
+        if (t.dataset.key === "col1") picker.col2 = null;
+        renderPicker();
+      }
+      else if (act === "pick-sugg") {
+        if (t.value) accept(itemId, t.value);
+      }
+    }
+
+    document.addEventListener("click", (e) => {
+      const t = e.target.closest("[data-act]");
+      if (!t) return;
+      if (t.classList.contains("scrim") && e.target.closest("[data-stop]")) return;
+      onAct(t.dataset.act, t);
+    });
+    document.addEventListener("change", (e) => {
+      const slot = e.target.dataset?.slot;
+      if (slot) {
+        setParams({ [slot]: e.target.value }, true);
+        return;
+      }
+      const t = e.target.closest("[data-act]");
+      if (t) onAct(t.dataset.act, t);
+    });
+    document.addEventListener("keydown", (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || document.activeElement?.isContentEditable) return;
+      if (e.key === "ArrowLeft") onAct("prev", document.body);
+      if (e.key === "ArrowRight") onAct("next", document.body);
+      if (e.key === "Escape" && picker) { picker = null; renderPicker(); }
+    });
+
+    reset("load");
+    render();
+  </script>
+</body>
+</html>

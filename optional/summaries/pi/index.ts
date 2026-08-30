@@ -6,98 +6,80 @@ import type { ProseSummaryV1, SummaryGenerator, SummarySnapshotV1 } from "../../
 import { filterCitations } from "../../../core/summaries.ts";
 
 async function loadPi() {
-  const roots = [
-    join(import.meta.dirname, "node_modules"),
-    join(process.cwd(), "optional/summaries/pi/node_modules"),
-    join(homedir(), ".pi/agent/npm/node_modules"),
+  const agentPaths = [
+    join(import.meta.dirname, "node_modules/@earendil-works/pi-coding-agent/dist/index.js"),
+    join(process.cwd(), "optional/summaries/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js"),
+    join(homedir(), ".pi/agent/npm/node_modules/@earendil-works/pi-coding-agent/dist/index.js"),
+    "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+    join(import.meta.dirname, "node_modules/@mariozechner/pi-coding-agent/dist/index.js"),
+    join(homedir(), ".pi/agent/npm/node_modules/@mariozechner/pi-coding-agent/dist/index.js"),
   ];
-  let aiPath = "";
-  let agentPath = "";
-  for (const root of roots) {
-    const ai = join(root, "@mariozechner/pi-ai/dist/index.js");
-    const agent = join(root, "@mariozechner/pi-coding-agent/dist/index.js");
-    if (existsSync(ai) && existsSync(agent)) {
-      aiPath = ai;
-      agentPath = agent;
-      break;
-    }
-  }
-  if (!aiPath) throw new Error("Pi packages not found. Run `pi` and /login. Deterministic summaries still work.");
-  const ai = await import(pathToFileURL(aiPath).href);
+  const agentPath = agentPaths.find((path) => existsSync(path));
+  if (!agentPath) throw new Error("Pi packages not found. Run `pi` and /login. Deterministic summaries still work.");
   const agent = await import(pathToFileURL(agentPath).href);
   return {
-    complete: ai.complete as (
-      model: unknown,
-      context: unknown,
-      options?: unknown,
-    ) => Promise<{
-      content: { type?: string; text?: string; thinking?: string }[];
-      stopReason?: string;
-      errorMessage?: string;
-      usage?: unknown;
-    }>,
-    AuthStorage: agent.AuthStorage as { create: () => unknown },
-    ModelRegistry: agent.ModelRegistry as {
-      create: (auth: unknown) => {
-        getAvailable: () => { provider: string; id: string }[];
-        getApiKeyAndHeaders: (model: unknown) => Promise<{ ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; error: string }>;
-      };
+    ModelRuntime: agent.ModelRuntime as {
+      create: () => Promise<{
+        getAvailable: () => Promise<{ provider: string; id: string }[]>;
+        listCredentials: () => Promise<{ providerId: string; type?: string }[]>;
+        completeSimple: (
+          model: unknown,
+          context: unknown,
+          options?: unknown,
+        ) => Promise<{
+          content: { type?: string; text?: string; thinking?: string }[];
+          stopReason?: string;
+          errorMessage?: string;
+        }>;
+      }>;
     },
   };
 }
 
-export async function piComplete(systemPrompt: string, payload: unknown, maxTokens = 900): Promise<string> {
-  const { complete, AuthStorage, ModelRegistry } = await loadPi();
-  const auth = AuthStorage.create() as {
-    list?: () => string[];
-    get?: (provider: string) => AuthCred | undefined;
-  };
-  const registry = ModelRegistry.create(auth);
-  const available = registry.getAvailable();
+export async function piComplete(
+  systemPrompt: string,
+  payload: unknown,
+  maxTokens = 900,
+  opts: { reasoning?: "off" | "low" | "high" | "max"; timeoutMs?: number; skip?: RegExp } = {},
+): Promise<string> {
+  const { ModelRuntime } = await loadPi();
+  const runtime = await ModelRuntime.create();
+  const available = [...(await runtime.getAvailable())];
   if (available.length === 0) {
     throw new Error("No Pi login found. Run `pi` and /login. Locus does not store provider keys.");
   }
-  const loggedIn = new Set(typeof auth.list === "function" ? auth.list() : []);
-  const keyProviders = new Set(
-    [...loggedIn].filter((p) => (typeof auth.get === "function" ? auth.get(p)?.type : undefined) === "api_key"),
-  );
-  const ranked = preferOpencodeModel(available.filter((m) => m.provider !== "opencode")).sort(
-    (a, b) => scoreModel(a, loggedIn, keyProviders) - scoreModel(b, loggedIn, keyProviders),
-  );
+  const creds = await runtime.listCredentials();
+  const loggedIn = new Set(creds.map((row) => row.providerId));
+  const keyProviders = new Set(creds.filter((row) => row.type === "api_key").map((row) => row.providerId));
+  const ranked = preferOpencodeModel(available.filter((m) => m.provider !== "opencode"))
+    .filter((model) => !opts.skip?.test(model.id))
+    .sort((a, b) => scoreModel(a, loggedIn, keyProviders) - scoreModel(b, loggedIn, keyProviders))
+    .slice(0, 6);
 
   let lastError = "No usable Pi model.";
   const dead = new Set<string>();
   for (const model of ranked) {
-    if (dead.has(model.provider)) continue;
-    const stored = typeof auth.get === "function" ? auth.get(model.provider) : undefined;
-    const creds = await registry.getApiKeyAndHeaders(model);
-    const apiKey = (creds.ok ? creds.apiKey : undefined) || oauthAccess(stored);
-    const headers = creds.ok ? creds.headers : undefined;
-    if (!apiKey && !headers) {
-      lastError = oauthExpired(stored)
-        ? `${model.provider} OAuth expired — run pi /login`
-        : !creds.ok
-          ? creds.error
-          : `no key for ${model.provider}`;
-      console.info(`pi: skip ${model.provider} (${lastError})`);
-      dead.add(model.provider);
-      continue;
-    }
-    console.info(`pi: trying ${model.provider}/${model.id}`);
-    const attempt = await complete(
+    const key = `${model.provider}/${model.id}`;
+    if (dead.has(key)) continue;
+    console.info(`pi: trying ${key}`);
+    const attempt = await runtime.completeSimple(
       model,
       {
         systemPrompt,
         messages: [{ role: "user", content: JSON.stringify(payload), timestamp: Date.now() }],
       },
-      { apiKey, headers, maxTokens },
+      {
+        maxTokens,
+        reasoning: opts.reasoning ?? "off",
+        signal: AbortSignal.timeout(opts.timeoutMs ?? 45_000),
+      },
     );
     const text = replyText(attempt.content ?? []);
-    if (attempt.errorMessage || attempt.stopReason === "error" || !text) {
-      lastError = attempt.errorMessage || `model ${model.provider}/${model.id} returned nothing`;
+    if (attempt.errorMessage || attempt.stopReason === "error" || attempt.stopReason === "aborted" || !text) {
+      lastError = attempt.errorMessage || `model ${key} returned nothing`;
       const types = (attempt.content ?? []).map((c) => `${c.type}:${(c.text || c.thinking || "").length}`);
-      console.info(`pi: ${model.provider}/${model.id} failed: ${lastError} stop=${attempt.stopReason} ${types.join(",")}`);
-      dead.add(model.provider);
+      console.info(`pi: ${key} failed: ${lastError} stop=${attempt.stopReason} ${types.join(",")}`);
+      dead.add(key);
       continue;
     }
     console.info(`pi: ok ${model.provider}/${model.id}`);

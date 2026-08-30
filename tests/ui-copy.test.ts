@@ -12,6 +12,18 @@ test("visible page copy does not expose implementation language", () => {
   }
 });
 
+test("Atlas page uses the locked kit and does not match geography in the client", () => {
+  const page = readFileSync(new URL("../app/src/AtlasPage.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /detectPlaces|core\/places|Southeast Asia|Unplaced/);
+  assert.match(page, /Needs a place/);
+  assert.match(page, /Change place/);
+  assert.match(page, /Choose exact place/);
+  assert.match(page, /Change home/);
+  assert.match(page, /Not for Atlas/);
+  assert.match(page, /role="dialog"/);
+  assert.match(page, /atlas-alert/);
+});
+
 test("Kitchen replaces Shelves in primary navigation with an in-place redirect", () => {
   const app = readFileSync(new URL("../app/src/App.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(app, /ShelvesPage/);

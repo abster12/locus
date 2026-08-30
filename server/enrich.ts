@@ -1,6 +1,8 @@
 import type { Db } from "../db/open.ts";
 import { nowIso, tx } from "../db/open.ts";
 import { LOCAL_LIBRARY_ID, reconcileItem } from "./reading/module.ts";
+import { enqueueAtlasItem } from "./atlas/module.ts";
+import { wakeAtlasWorker } from "./atlas/ai.ts";
 
 const URL_RE = /https?:\/\/[^\s]+/g;
 const FX = "https://api.fxtwitter.com/status/";
@@ -86,7 +88,9 @@ export async function enrichXItems(db: Db, urls?: string[]): Promise<number> {
         );
         // Keep Reading discovery in the same commit as the enriched Item body.
         reconcileItem(db, LOCAL_LIBRARY_ID, row.id);
+        enqueueAtlasItem(db, LOCAL_LIBRARY_ID, row.id);
       });
+      wakeAtlasWorker(db);
       filled += 1;
     } catch {
       // fxtwitter down — leave the save as captured

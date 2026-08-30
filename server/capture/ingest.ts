@@ -5,6 +5,8 @@ import { RejectedPayload } from "../../core/sanitize.ts";
 import type { SourceId } from "../../core/types.ts";
 import type { CaptureBatchV1, CaptureFinishV1, CaptureSessionV1 } from "../../packages/protocol/types.ts";
 import { LOCAL_LIBRARY_ID, reconcileItem, wakeReadingWorker } from "../reading/module.ts";
+import { enqueueAtlasItem } from "../atlas/module.ts";
+import { wakeAtlasWorker } from "../atlas/ai.ts";
 
 export interface CaptureToken {
   id: string;
@@ -278,6 +280,7 @@ function upsertItem(
     );
     // Same SQLite transaction as the Item write: a crash cannot keep the post without Reading rows.
     reconcileItem(db, LOCAL_LIBRARY_ID, existing.item_id);
+    enqueueAtlasItem(db, LOCAL_LIBRARY_ID, existing.item_id);
     return "updated";
   }
 
@@ -340,6 +343,7 @@ function upsertItem(
   ).run(newId(), itemId, args.activityKind, args.observedAt, args.captureRunId);
   // Same SQLite transaction as the Item write: a crash cannot keep the post without Reading rows.
   reconcileItem(db, LOCAL_LIBRARY_ID, itemId);
+  enqueueAtlasItem(db, LOCAL_LIBRARY_ID, itemId);
   return "inserted";
 }
 
@@ -516,6 +520,7 @@ export function finishSession(
     return { removed };
   });
   wakeReadingWorker(db);
+  wakeAtlasWorker(db);
   return result;
 }
 

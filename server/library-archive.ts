@@ -23,6 +23,14 @@ import {
   kitchenLibraryIsEmpty,
   type KitchenArchiveRecord,
 } from "./kitchen/module.ts";
+import {
+  atlasBackfillSettingKey,
+  atlasBackfillVersionSettingKey,
+  atlasLibraryIsEmpty,
+  exportAtlasRecords,
+  importAtlasRecords,
+  type AtlasArchiveRecord,
+} from "./atlas/module.ts";
 
 export const ARCHIVE_FORMAT = "locus-library";
 export const ARCHIVE_VERSION = 1;
@@ -67,6 +75,8 @@ const KINDS = [
   "readingProgress",
   "kitchenRecipeDocument",
   "kitchenTonightEntry",
+  "atlasPlace",
+  "atlasAssignment",
 ] as const;
 
 type Kind = (typeof KINDS)[number];
@@ -111,7 +121,7 @@ export function libraryIsEmpty(db: Db): boolean {
   for (const table of tables) {
     if (count(db, `SELECT COUNT(*) AS n FROM ${table}`) > 0) return false;
   }
-  return readingLibraryIsEmpty(db) && kitchenLibraryIsEmpty(db);
+  return readingLibraryIsEmpty(db) && kitchenLibraryIsEmpty(db) && atlasLibraryIsEmpty(db);
 }
 
 export function writeLibraryArchive(
@@ -122,7 +132,8 @@ export function writeLibraryArchive(
 ): number {
   const reading = exportReadingRecords(db, libraryId);
   const kitchen = exportKitchenRecords(db, libraryId);
-  const counts = archiveCounts(db, reading.counts, kitchen.counts);
+  const atlas = exportAtlasRecords(db, libraryId);
+  const counts = archiveCounts(db, reading.counts, kitchen.counts, atlas.counts);
   const fd = openSync(dest, "w");
   let bytes = 0;
   try {
@@ -143,7 +154,7 @@ export function writeLibraryArchive(
       counts,
       excluded: [...EXCLUDED, ...readingArchiveExcluded()],
     });
-    for (const record of iterateRecords(db, reading.records, kitchen.records)) write(record);
+    for (const record of iterateRecords(db, reading.records, kitchen.records, atlas.records)) write(record);
     return bytes;
   } finally {
     closeSync(fd);
@@ -203,8 +214,12 @@ export async function importLibraryArchive(db: Db, path: string): Promise<{ ok: 
   }
 }
 
-function archiveCounts(db: Db, reading: ReadingArchiveCounts, kitchen: { kitchenRecipeDocument: number; kitchenTonightEntry: number }): Record<Kind, number> {
-  const backfillSetting = readingBackfillSettingKey();
+function archiveCounts(
+  db: Db,
+  reading: ReadingArchiveCounts,
+  kitchen: { kitchenRecipeDocument: number; kitchenTonightEntry: number },
+  atlas: { atlasPlace: number; atlasAssignment: number },
+): Record<Kind, number> {
   return {
     sourceAccount: count(db, `SELECT COUNT(*) AS n FROM source_accounts`),
     sourceCollection: count(db, `SELECT COUNT(*) AS n FROM source_collections`),
@@ -216,11 +231,18 @@ function archiveCounts(db: Db, reading: ReadingArchiveCounts, kitchen: { kitchen
     membership: count(db, `SELECT COUNT(*) AS n FROM memberships`),
     note: count(db, `SELECT COUNT(*) AS n FROM notes`),
     summary: count(db, `SELECT COUNT(*) AS n FROM summaries`),
-    setting: count(db, `SELECT COUNT(*) AS n FROM settings WHERE key != ?`, backfillSetting),
+    setting: count(
+      db,
+      `SELECT COUNT(*) AS n FROM settings WHERE key != ? AND key != ? AND key != ?`,
+      readingBackfillSettingKey(),
+      atlasBackfillSettingKey(),
+      atlasBackfillVersionSettingKey(),
+    ),
     sourceRecord: count(db, `SELECT COUNT(*) AS n FROM source_records`),
     sourceMembership: count(db, `SELECT COUNT(*) AS n FROM source_memberships`),
     ...reading,
     ...kitchen,
+    ...atlas,
   };
 }
 
@@ -228,6 +250,7 @@ function* iterateRecords(
   db: Db,
   readingRecords: Iterable<ReadingArchiveRecord>,
   kitchenRecords: readonly KitchenArchiveRecord[],
+  atlasRecords: readonly AtlasArchiveRecord[],
 ): Generator<Rec> {
   for (const row of all(db, `SELECT id, source, external_id, display_name, created_at FROM source_accounts`)) {
     yield {
@@ -315,7 +338,14 @@ function* iterateRecords(
       createdAt: row.created_at,
     };
   }
-  for (const row of all(db, `SELECT key, value FROM settings WHERE key != ?`, readingBackfillSettingKey())) {
+  for (const row of all(
+    db,
+    `SELECT key, value FROM settings WHERE key != ? AND key != ? AND key != ?`,
+    readingBackfillSettingKey(),
+    atlasBackfillSettingKey(),
+    atlasBackfillVersionSettingKey(),
+  )) {
+    if (/token|secret|password|cookie/i.test(String(row.key))) continue;
     yield { kind: "setting", key: row.key, value: row.value };
   }
   for (const row of all(db, `SELECT * FROM source_records`)) {
@@ -343,6 +373,7 @@ function* iterateRecords(
   // Kitchen records reference Items, so they are written after them. Recipe
   // Documents cannot survive their Item; broken Tonight pins can.
   yield* kitchenRecords;
+  yield* atlasRecords;
   yield* readingRecords;
 }
 
@@ -514,7 +545,7 @@ function insertStaged(db: Db, staged: Stage): void {
   );
   for (const row of kindRows(staged, "setting")) {
     const key = req(row.key, 200);
-    if (key === readingBackfillSettingKey() || /token|secret|password|cookie/i.test(key)) continue;
+    if (key === readingBackfillSettingKey() || key === atlasBackfillSettingKey() || key === atlasBackfillVersionSettingKey() || /token|secret|password|cookie/i.test(key)) continue;
     insSetting.run(key, req(row.value, MAX_SETTING));
   }
   const insRecord = db.prepare(
@@ -548,6 +579,11 @@ function insertStaged(db: Db, staged: Stage): void {
   importKitchenRecords(db, {
     recipes: kindRows(staged, "kitchenRecipeDocument"),
     tonight: kindRows(staged, "kitchenTonightEntry"),
+    itemIds: uniqueIds(kindRows(staged, "item"), "id"),
+  });
+  importAtlasRecords(db, {
+    places: kindRows(staged, "atlasPlace"),
+    assignments: kindRows(staged, "atlasAssignment"),
     itemIds: uniqueIds(kindRows(staged, "item"), "id"),
   });
   importReadingRecords(db, {

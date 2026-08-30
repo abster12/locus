@@ -314,7 +314,100 @@ export const api = {
   removeTonight: (entryId: string) =>
     req<{ removed: boolean }>(`/api/kitchen/tonight/${encodeURIComponent(entryId)}/remove`, { method: "POST", body: "{}" }),
   clearTonight: () => req<{ removed: number }>("/api/kitchen/tonight/clear", { method: "POST", body: "{}" }),
+  atlas: (signal?: AbortSignal) => req<AtlasProjection>("/api/atlas", { signal }),
+  atlasPlaces: (q: string, signal?: AbortSignal) =>
+    req<{ places: AtlasPlace[] }>(`/api/atlas/places?q=${encodeURIComponent(q)}`, { signal }),
+  atlasHome: (body: { placeId?: string | null; name?: string; kind?: string; parentId?: string | null }) =>
+    req<{ home: AtlasPlace | null; atlas: AtlasProjection }>("/api/atlas/home", { method: "POST", body: JSON.stringify(body) }),
+  atlasAccept: (id: string, index: number, expectedVersion: number) =>
+    req<{ assignment: AtlasAssignment; atlas: AtlasProjection }>(`/api/atlas/items/${encodeURIComponent(id)}/accept`, {
+      method: "POST",
+      body: JSON.stringify({ index, expectedVersion }),
+    }),
+  atlasPlace: (id: string, body: { expectedVersion: number; placeId?: string; name?: string; kind?: string; parentId?: string | null }) =>
+    req<{ assignment: AtlasAssignment; atlas: AtlasProjection }>(`/api/atlas/items/${encodeURIComponent(id)}/place`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  atlasMultiple: (id: string, expectedVersion: number) =>
+    req<{ assignment: AtlasAssignment; atlas: AtlasProjection }>(`/api/atlas/items/${encodeURIComponent(id)}/multiple`, {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion }),
+    }),
+  atlasNotAtlas: (id: string, expectedVersion: number) =>
+    req<{ assignment: AtlasAssignment; atlas: AtlasProjection }>(`/api/atlas/items/${encodeURIComponent(id)}/not-atlas`, {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion }),
+    }),
+  atlasLeave: (id: string, expectedVersion: number) =>
+    req<{ assignment: AtlasAssignment | null; atlas: AtlasProjection }>(`/api/atlas/items/${encodeURIComponent(id)}/leave`, {
+      method: "POST",
+      body: JSON.stringify({ expectedVersion }),
+    }),
+  atlasChange: (id: string, placeId: string, expectedVersion: number) =>
+    req<{ assignment: AtlasAssignment; atlas: AtlasProjection }>(`/api/atlas/items/${encodeURIComponent(id)}/change`, {
+      method: "POST",
+      body: JSON.stringify({ placeId, expectedVersion }),
+    }),
 };
+
+export interface AtlasPlace {
+  id: string;
+  name: string;
+  kind: string;
+  parentId: string | null;
+  ancestors: { id: string; name: string }[];
+  altNames: string[];
+  accent: { color: string; ink: string };
+}
+
+export interface AtlasSuggestion {
+  name: string;
+  kind: string;
+  parentName?: string;
+  role: string;
+  evidence: { field: string; start: number; end: number; text: string }[];
+}
+
+export interface AtlasAssignment {
+  id: string;
+  itemId: string;
+  outcome: string;
+  actor: "analyzer" | "user";
+  version: number;
+  primary: AtlasPlace | null;
+  contained: AtlasPlace[];
+  mentioned: AtlasPlace[];
+  peers: AtlasPlace[];
+  suggestions: AtlasSuggestion[];
+}
+
+export interface AtlasCard {
+  item: ItemCard;
+  assignment: AtlasAssignment;
+}
+
+export interface AtlasReviewRow {
+  item: ItemCard;
+  assignment: AtlasAssignment | null;
+}
+
+export interface AtlasProjection {
+  home: { place: AtlasPlace | null };
+  analysis: { available: boolean; detail: string; queued: number; failed: number; backfillDone: boolean };
+  needsPlace: { count: number; preview: AtlasReviewRow[]; items: AtlasReviewRow[] };
+  multiple: AtlasCard[];
+  destinations: {
+    id: string;
+    title: string;
+    kind: "around_home" | "destination";
+    placeId: string | null;
+    count: number;
+    contained: string[];
+    items: AtlasCard[];
+  }[];
+  counts: { items: number; destinations: number };
+}
 
 export interface RecipeSummary {
   id: string;

@@ -25,6 +25,10 @@ Local-first desk for personal social saves (X Bookmarks, Instagram Saved, YouTub
 - **Tonight entry** — one durable Item reference in Tonight, retained even when its Item is missing.
 - **Watch & Cook** — a focused Kitchen source view with available media, captured caption, and original-post exit.
 - **caption** — the captured Item body shown as source material, never a claim of complete instructions.
+- **Place** — a reusable, user-visible geographic or visitable entity known to the Library. It has a canonical display name, a kind, an optional parent Place, alternate names, and optional coordinates or external identifier. A Place is not a tag or Collection.
+- **Place Assignment** — one Item's durable Atlas classification, including its outcome, primary Place when applicable, actor, evidence, source revision, and contained or mentioned Places.
+- **Place Suggestion** — a bounded analyzer proposal awaiting validation or user choice. It is not a confirmed Place Assignment.
+- **home base** — the one user-selected Place used to project a local Atlas section. It is configuration, not a special Place kind. Location analysis is desk-side enrichment, never “sync.”
 
 ## How captures reach the desk
 
