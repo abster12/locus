@@ -29,6 +29,15 @@ Local-first desk for personal social saves (X Bookmarks, Instagram Saved, YouTub
 - **Place Assignment** — one Item's durable Atlas classification, including its outcome, primary Place when applicable, actor, evidence, source revision, and contained or mentioned Places.
 - **Place Suggestion** — a bounded analyzer proposal awaiting validation or user choice. It is not a confirmed Place Assignment.
 - **home base** — the one user-selected Place used to project a local Atlas section. It is configuration, not a special Place kind. Location analysis is desk-side enrichment, never “sync.”
+- **Trips** — the top-level Locus section for durable travel plans, alongside Desk, Atlas, Kitchen, and Reading.
+- **Trip Document** — one durable travel plan owned by a Library: destination, dates or length, optional user-entered context, ordered days, stops, Unscheduled entries, revision, and history. Not an Item, Place, or overlay.
+- **Trip Day** — one ordered day inside a Trip Document, with a stable identity. It may have a calendar date or be an open-dated duration day.
+- **Trip Stop** — one ordered entry on a Trip Day or in Unscheduled. It may reference an Item, reference a Place, hold trip-owned outside content, or be a hole.
+- **Trip Changeset** — one atomic, revision-checked mutation of a Trip Document, with inverse operations so Undo and Redo apply complete actions.
+- **Trip Advisory** — a bounded, labelled Agent opinion about travel feasibility, strain, or missing information, tied to a reviewed Trip Document revision. Not deterministic validation.
+- **hole** — a durable user need stored at an exact day or Unscheduled placement until filled, dismissed, or removed.
+- **outside content** — trip-owned stop content the user entered that is not an Item or Place. It is never automatically captured into the Library.
+- **Share Snapshot** — an immutable, sanitized, read-only projection of a Trip Document published behind a capability link. Not access to the live document.
 
 ## How captures reach the desk
 

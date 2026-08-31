@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 test("visible page copy does not expose implementation language", () => {
-  const files = ["KitchenPage.tsx", "AtlasPage.tsx", "ReadingPage.tsx", "SourcesPage.tsx", "SummaryPage.tsx", "Stage.tsx", "DeskPage.tsx"];
+  const files = ["KitchenPage.tsx", "AtlasPage.tsx", "ReadingPage.tsx", "SourcesPage.tsx", "SummaryPage.tsx", "Stage.tsx", "DeskPage.tsx", "TripsPage.tsx", "App.tsx"];
   const copy = files
     .map((file) => readFileSync(new URL(`../app/src/${file}`, import.meta.url), "utf8").replace(/^import .*$/gm, ""))
     .join("\n");
@@ -38,13 +38,27 @@ test("Atlas page uses the locked kit and does not match geography in the client"
   assert.match(page, /atlas-alert/);
 });
 
+test("Trips index copy stays a Locus section, not an overlay or workspace", () => {
+  const page = ["TripsPage.tsx", "trips-index.tsx", "trips-document.tsx", "trips-overview.tsx", "trips-schedule.tsx", "trips-stops.tsx", "trips-advisories.tsx", "trips-recommendations.tsx", "trips-share.tsx"]
+    .map((file) => readFileSync(new URL(`../app/src/${file}`, import.meta.url), "utf8"))
+    .join("\n");
+  assert.match(page, /Plan a trip/);
+  assert.match(page, /Trip Documents/);
+  assert.doesNotMatch(page, /Scratch Pad|overlay|direction picker|Kitchen board/i);
+});
+
 test("Kitchen replaces Shelves in primary navigation with an in-place redirect", () => {
   const app = readFileSync(new URL("../app/src/App.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(app, /ShelvesPage/);
   assert.match(app, /a === "shelves"/);
   assert.match(app, /history\.replaceState\(null, "", `\$\{location\.pathname\}\$\{location\.search\}#\/recent`\)/);
   assert.match(app, /name: "kitchen"/);
-  // Tab order: Desk · Kitchen · Atlas · Reading · Sources.
+  // Tab order: Desk · Kitchen · Atlas · Trips · Reading · Sources.
   const tabs = [...app.matchAll(/<Tab href="(#[^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(tabs, ["#/recent", "#/kitchen", "#/atlas", "#/reading", "#/sources"]);
+  assert.deepEqual(tabs, ["#/recent", "#/kitchen", "#/atlas", "#/trips", "#/reading", "#/sources"]);
+  assert.match(app, /\+ New/);
+  assert.match(app, /Plan a trip/);
+  assert.match(app, /Save a link/);
+  assert.match(app, /Make a saved dish cookable/);
+  assert.doesNotMatch(app, /Scratch Pad|hamburger|direction picker/i);
 });

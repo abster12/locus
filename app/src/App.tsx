@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import {
   api,
   boot,
@@ -12,6 +12,7 @@ import { ItemList } from "./DeskPage.tsx";
 import { ReadingPage } from "./ReadingPage.tsx";
 import { AtlasPage } from "./AtlasPage.tsx";
 import { KitchenPage, KitchenDetail } from "./KitchenPage.tsx";
+import { TripsPage } from "./TripsPage.tsx";
 import { CollectionsPage } from "./CollectionsPage.tsx";
 import { SummaryPage } from "./SummaryPage.tsx";
 import { canMountLiveFrame, firstStageDestination } from "./stage-navigation.ts";
@@ -30,6 +31,9 @@ type Route =
   | { name: "atlas" }
   | { name: "kitchen" }
   | { name: "kitchenItem"; id: string; mode: "auto" | "watch" | "edit" }
+  | { name: "trips"; filter: "active" | "archived" }
+  | { name: "tripsSetup" }
+  | { name: "trip"; id: string; view: string }
   | { name: "summary"; scope: "day" | "collection"; ref: string };
 
 function parseHash(): Route {
@@ -55,6 +59,15 @@ function parseHash(): Route {
       return { name: "kitchenItem", id: b, mode };
     }
     return { name: "kitchen" };
+  }
+  if (a === "trips") {
+    if (b === "new") return { name: "tripsSetup" };
+    // The view lives in the hash query so Back/Forward restore Overview,
+    // Schedule, or the focused day exactly like any other route state.
+    if (b) return { name: "trip", id: b, view: q.get("view") ?? "" };
+    // The filter lives in the hash query so Back/Forward restore it like any
+    // other route state; `#/trips/archived` would look like a trip id.
+    return { name: "trips", filter: q.get("filter") === "archived" ? "archived" : "active" };
   }
   if (a === "shelves") {
     // Shelves moved into the Desk rail. Replace in place so old links and
@@ -299,6 +312,7 @@ export function App() {
               />
               <kbd>/</kbd>
             </label>
+            <NewMenu />
             <button
               type="button"
               className="themebtn"
@@ -342,6 +356,9 @@ export function App() {
         <Tab href="#/atlas" active={route.name === "atlas"}>
           Atlas
         </Tab>
+        <Tab href="#/trips" active={route.name === "trips" || route.name === "tripsSetup" || route.name === "trip"}>
+          Trips
+        </Tab>
         <Tab href="#/reading" active={route.name === "reading"}>
           Reading
         </Tab>
@@ -359,6 +376,9 @@ export function App() {
       {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {route.name === "kitchen" && <KitchenPage />}
       {route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}
+      {route.name === "trips" && <TripsPage mode="index" filter={route.filter} />}
+      {route.name === "tripsSetup" && <TripsPage mode="setup" />}
+      {route.name === "trip" && <TripsPage mode="document" tripId={route.id} documentView={route.view} />}
       {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
       <Stage
         key={`${stageItem?.id ?? "closed"}:${stagePage ?? ""}`}
@@ -408,8 +428,97 @@ function CaptureBanner() {
 
 function Tab({ href, active, children }: { href: string; active: boolean; children: ReactNode }) {
   return (
-    <a href={href} className={active ? "active" : undefined}>
+    <a href={href} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>
       {children}
     </a>
+  );
+}
+
+function NewMenu() {
+  const menuId = useId();
+  const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const close = () => setOpen(false);
+    window.addEventListener("hashchange", close);
+    return () => window.removeEventListener("hashchange", close);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const first = root.current?.querySelector<HTMLElement>('[role="menuitem"]');
+    first?.focus();
+    const onPointer = (event: MouseEvent) => {
+      if (root.current && !root.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      button.current?.focus();
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  function onMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      items[(index + 1 + items.length) % items.length]?.focus();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      items[(index - 1 + items.length) % items.length]?.focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      (document.activeElement as HTMLElement | null)?.click();
+    } else if (event.key === "Tab") {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div className="new-menu-wrap" ref={root}>
+      <button
+        ref={button}
+        type="button"
+        className="new-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        onClick={() => setOpen((value) => !value)}
+      >
+        + New
+      </button>
+      {open ? (
+        <div id={menuId} className="new-menu" role="menu" aria-label="Start something new" onKeyDown={onMenuKeyDown}>
+          <a role="menuitem" href="#/trips/new" onClick={() => setOpen(false)}>
+            <b>Plan a trip</b>
+            <small>Create a durable Trip Document.</small>
+          </a>
+          <a role="menuitem" href="#/sources" onClick={() => setOpen(false)}>
+            <b>Save a link</b>
+            <small>Capture an Item; readable sources appear in Reading.</small>
+          </a>
+          <a role="menuitem" href="#/kitchen" onClick={() => setOpen(false)}>
+            <b>Make a saved dish cookable</b>
+            <small>Choose a Food Item and work on its Recipe Document in Kitchen.</small>
+          </a>
+        </div>
+      ) : null}
+    </div>
   );
 }

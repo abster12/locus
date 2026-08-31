@@ -327,6 +327,36 @@ export function getItem(db: Db, id: string): ItemCard | null {
   return row ? hydrate(db, row) : null;
 }
 
+// ponytail: items have no library_id; captured Items belong to the local Library
+// until capture is library-keyed. Unknown and foreign libraryIds both miss.
+const LOCAL_ITEM_LIBRARY_ID = "local";
+
+/** Library-scoped Item lookup. Foreign ids are indistinguishable from unknown. */
+export function getLibraryItem(db: Db, libraryId: string, id: string): ItemCard | null {
+  const row = db.prepare(`${ITEM_SELECT} WHERE i.id = ? AND ? = ?`).get(id, libraryId, LOCAL_ITEM_LIBRARY_ID) as ItemRow | undefined;
+  return row ? hydrate(db, row) : null;
+}
+
+/** Bounded selection summaries for pickers (Trips): identity, a display title,
+ * and the source label. Never captions, media, credentials, or notes. */
+export function searchItemSummaries(db: Db, libraryId: string, q: string, limit = 20): { id: string; title: string; source: string | null }[] {
+  const needle = `%${q.trim().slice(0, 80).replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+  const rows = db
+    .prepare(
+      `${ITEM_SELECT}
+       WHERE ? = ?
+         AND (i.title LIKE ? ESCAPE '\\' OR i.body LIKE ? ESCAPE '\\')
+       ORDER BY i.first_observed_at DESC, i.id
+       LIMIT ?`,
+    )
+    .all(libraryId, LOCAL_ITEM_LIBRARY_ID, needle, needle, Math.max(1, Math.min(50, Math.floor(limit)))) as (ItemRow & { source: string | null })[];
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title?.trim() || row.body?.trim().slice(0, 80) || "Saved item",
+    source: row.source ?? null,
+  }));
+}
+
 export function listCollections(db: Db): { id: string; name: string; description: string | null; count: number }[] {
   return db
     .prepare(

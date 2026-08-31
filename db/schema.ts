@@ -1,6 +1,6 @@
 import type { Db } from "./open.ts";
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 21;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -400,6 +400,145 @@ CREATE TABLE IF NOT EXISTS atlas_screenings (
 );
 
 CREATE INDEX IF NOT EXISTS atlas_screenings_queue ON atlas_screenings(library_id, status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS trips (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  timezone TEXT,
+  start_date TEXT,
+  end_date TEXT,
+  duration_days INTEGER NOT NULL,
+  travelers TEXT,
+  context_json TEXT NOT NULL DEFAULT '{}',
+  inferences_json TEXT NOT NULL DEFAULT '[]',
+  revision INTEGER NOT NULL DEFAULT 1,
+  archived_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(library_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS trips_library_updated ON trips(library_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS trip_days (
+  id TEXT PRIMARY KEY,
+  trip_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  date TEXT,
+  label TEXT NOT NULL,
+  theme TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(trip_id, position),
+  FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS trip_days_trip ON trip_days(trip_id, position);
+
+CREATE TABLE IF NOT EXISTS trip_stops (
+  id TEXT PRIMARY KEY,
+  trip_id TEXT NOT NULL,
+  day_id TEXT,
+  position INTEGER NOT NULL,
+  content_json TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'confirmed' CHECK (state IN ('confirmed', 'draft')),
+  provenance_json TEXT NOT NULL DEFAULT '{}',
+  public_notes TEXT NOT NULL DEFAULT '',
+  private_notes TEXT NOT NULL DEFAULT '',
+  time_window TEXT,
+  duration_minutes INTEGER,
+  reservation TEXT,
+  stored_facts_json TEXT NOT NULL DEFAULT '[]',
+  alternatives_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+  FOREIGN KEY (day_id) REFERENCES trip_days(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS trip_stops_order ON trip_stops(trip_id, day_id, position);
+
+CREATE TABLE IF NOT EXISTS trip_changesets (
+  id TEXT PRIMARY KEY,
+  trip_id TEXT NOT NULL,
+  base_revision INTEGER NOT NULL,
+  result_revision INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  instruction TEXT,
+  client_mutation_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'change' CHECK (kind IN ('change', 'undo', 'redo')),
+  operations_json TEXT NOT NULL,
+  inverse_json TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  reverses_id TEXT,
+  payload_hash TEXT NOT NULL,
+  undone_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(trip_id, client_mutation_id),
+  FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS trip_changesets_trip ON trip_changesets(trip_id, created_at);
+
+CREATE TABLE IF NOT EXISTS trip_advisories (
+  id TEXT PRIMARY KEY,
+  trip_id TEXT NOT NULL,
+  reviewed_revision INTEGER NOT NULL,
+  category TEXT NOT NULL CHECK (category IN ('travel_feasibility', 'strain', 'missing_information')),
+  severity TEXT NOT NULL CHECK (severity IN ('info', 'concern', 'urgent')),
+  opinion TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  day_refs_json TEXT NOT NULL DEFAULT '[]',
+  stop_refs_json TEXT NOT NULL DEFAULT '[]',
+  actor TEXT NOT NULL DEFAULT 'agent',
+  client_mutation_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  dismissed_at TEXT,
+  FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS trip_advisories_trip ON trip_advisories(trip_id, created_at);
+CREATE INDEX IF NOT EXISTS trip_advisories_mutation ON trip_advisories(trip_id, client_mutation_id);
+
+CREATE TABLE IF NOT EXISTS trip_share_snapshots (
+  id TEXT PRIMARY KEY,
+  trip_id TEXT NOT NULL,
+  trip_revision INTEGER NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  snapshot_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  revoked_at TEXT,
+  FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS trip_share_snapshots_trip ON trip_share_snapshots(trip_id);
+
+CREATE TABLE IF NOT EXISTS trip_mutation_receipts (
+  library_id TEXT NOT NULL,
+  client_mutation_id TEXT NOT NULL,
+  trip_id TEXT,
+  kind TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  result_revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(library_id, client_mutation_id)
+);
+
+CREATE TABLE IF NOT EXISTS trip_review_intents (
+  library_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  trip_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (library_id, session_id, trip_id),
+  FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+);
 `;
 
 type ForeignKey = { table: string; from: string; to: string; on_delete: string };
@@ -441,6 +580,15 @@ export function migrateSchema(db: Db): void {
     if (current < 8) migrateReadingRescan(db);
     if (current < 11) migrateAtlasPolicy(db);
     if (current < 12) migrateAtlasScreening(db);
+    if (current < 13) migrateTripDocuments(db);
+    if (current < 14) migrateTripPlanner(db);
+    if (current < 15) migrateTripAdvisories(db);
+    if (current < 16) migrateTripInferences(db);
+    if (current < 17) migrateTripShare(db);
+    if (current < 18) migrateTripStopFacts(db);
+    if (current < 19) migrateTripMutationReceipts(db);
+    if (current < 20) migrateTripMutationReceiptsOwnerScope(db);
+    if (current < 21) migrateTripReviewIntents(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -487,6 +635,254 @@ function migrateAtlasScreening(db: Db): void {
     );
     CREATE INDEX IF NOT EXISTS atlas_screenings_queue ON atlas_screenings(library_id, status, next_attempt_at);
   `);
+}
+
+/** Trips are additive like Atlas screening: the tables arrive with the module
+ * and existing libraries pick them up on the next open. */
+function migrateTripDocuments(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trips (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      destination TEXT NOT NULL,
+      timezone TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      duration_days INTEGER NOT NULL,
+      travelers TEXT,
+      context_json TEXT NOT NULL DEFAULT '{}',
+      revision INTEGER NOT NULL DEFAULT 1,
+      archived_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(library_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS trips_library_updated ON trips(library_id, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS trip_days (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      date TEXT,
+      label TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(trip_id, position),
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS trip_days_trip ON trip_days(trip_id, position);
+  `);
+}
+
+/** Day Planner state: stops reference their day by id (NULL = Unscheduled)
+ * and every revision transition is one changeset row. A deleted day releases
+ * its stops to Unscheduled (SET NULL) instead of destroying them. */
+function migrateTripPlanner(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trip_stops (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      day_id TEXT,
+      position INTEGER NOT NULL,
+      content_json TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'confirmed' CHECK (state IN ('confirmed', 'draft')),
+      provenance_json TEXT NOT NULL DEFAULT '{}',
+      public_notes TEXT NOT NULL DEFAULT '',
+      private_notes TEXT NOT NULL DEFAULT '',
+      time_window TEXT,
+      duration_minutes INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+      FOREIGN KEY (day_id) REFERENCES trip_days(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS trip_stops_order ON trip_stops(trip_id, day_id, position);
+    CREATE TABLE IF NOT EXISTS trip_changesets (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      base_revision INTEGER NOT NULL,
+      result_revision INTEGER NOT NULL,
+      actor TEXT NOT NULL,
+      instruction TEXT,
+      client_mutation_id TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'change' CHECK (kind IN ('change', 'undo', 'redo')),
+      operations_json TEXT NOT NULL,
+      inverse_json TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      reverses_id TEXT,
+      payload_hash TEXT NOT NULL,
+      undone_at TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(trip_id, client_mutation_id),
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS trip_changesets_trip ON trip_changesets(trip_id, created_at);
+  `);
+}
+
+/** Agent trip-review advisories: bounded opinions tied to the exact revision
+ * they reviewed. client_mutation_id + payload_hash make retries idempotent
+ * (checked inside the write transaction, one row per flag with a shared
+ * review id); dismissal stamps dismissed_at and keeps the row for history. */
+function migrateTripAdvisories(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trip_advisories (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      reviewed_revision INTEGER NOT NULL,
+      category TEXT NOT NULL CHECK (category IN ('travel_feasibility', 'strain', 'missing_information')),
+      severity TEXT NOT NULL CHECK (severity IN ('info', 'concern', 'urgent')),
+      opinion TEXT NOT NULL,
+      rationale TEXT NOT NULL,
+      day_refs_json TEXT NOT NULL DEFAULT '[]',
+      stop_refs_json TEXT NOT NULL DEFAULT '[]',
+      actor TEXT NOT NULL DEFAULT 'agent',
+      client_mutation_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      dismissed_at TEXT,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS trip_advisories_trip ON trip_advisories(trip_id, created_at);
+    CREATE INDEX IF NOT EXISTS trip_advisories_mutation ON trip_advisories(trip_id, client_mutation_id);
+  `);
+}
+
+/** Share Snapshots (ticket 11): one immutable sanitized projection per trip,
+ * reachable only through an unguessable capability token stored as a hash.
+ * Additive like every other Trips table. */
+function migrateTripShare(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trip_share_snapshots (
+      id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      trip_revision INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS trip_share_snapshots_trip ON trip_share_snapshots(trip_id);
+  `);
+}
+
+function migrateTripStopFacts(db: Db): void {
+  const dayCols = db.prepare(`PRAGMA table_info(trip_days)`).all() as { name: string }[];
+  if (!dayCols.some((column) => column.name === "theme")) {
+    db.exec(`ALTER TABLE trip_days ADD COLUMN theme TEXT`);
+  }
+  const stopCols = db.prepare(`PRAGMA table_info(trip_stops)`).all() as { name: string }[];
+  if (!stopCols.some((column) => column.name === "reservation")) {
+    db.exec(`ALTER TABLE trip_stops ADD COLUMN reservation TEXT`);
+  }
+  if (!stopCols.some((column) => column.name === "stored_facts_json")) {
+    db.exec(`ALTER TABLE trip_stops ADD COLUMN stored_facts_json TEXT NOT NULL DEFAULT '[]'`);
+  }
+  if (!stopCols.some((column) => column.name === "alternatives_json")) {
+    db.exec(`ALTER TABLE trip_stops ADD COLUMN alternatives_json TEXT NOT NULL DEFAULT '[]'`);
+  }
+}
+
+/** Mutation receipts for lifecycle Trip writes (v19): one row per accepted
+ * clientMutationId so retries of setup/rename/duplicate/archive/restore/
+ * delete/dismiss/inference/share mutations replay their original result
+ * instead of re-applying. v20 drops the trip CASCADE and scopes uniqueness to
+ * the owning Library so create and delete retries survive the Trip row. */
+function migrateTripMutationReceipts(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trip_mutation_receipts (
+      trip_id TEXT NOT NULL,
+      client_mutation_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      result_revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(trip_id, client_mutation_id),
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+function migrateTripMutationReceiptsOwnerScope(db: Db): void {
+  const cols = db.prepare(`PRAGMA table_info(trip_mutation_receipts)`).all() as { name: string }[];
+  if (!cols.length) {
+    db.exec(`
+      CREATE TABLE trip_mutation_receipts (
+        library_id TEXT NOT NULL,
+        client_mutation_id TEXT NOT NULL,
+        trip_id TEXT,
+        kind TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        result_revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(library_id, client_mutation_id)
+      );
+    `);
+    return;
+  }
+  const hasLibrary = cols.some((column) => column.name === "library_id");
+  const fks = db.prepare(`PRAGMA foreign_key_list(trip_mutation_receipts)`).all() as ForeignKey[];
+  const cascades = fks.some((key) => key.table === "trips" && key.on_delete.toUpperCase() === "CASCADE");
+  if (hasLibrary && !cascades) return;
+
+  db.exec(`
+    CREATE TABLE trip_mutation_receipts_v20 (
+      library_id TEXT NOT NULL,
+      client_mutation_id TEXT NOT NULL,
+      trip_id TEXT,
+      kind TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      result_revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(library_id, client_mutation_id)
+    );
+    INSERT INTO trip_mutation_receipts_v20 (library_id, client_mutation_id, trip_id, kind, payload_hash, result_json, result_revision, created_at)
+      SELECT library_id, client_mutation_id, trip_id, kind, payload_hash, result_json, result_revision, created_at
+      FROM (
+        SELECT t.library_id AS library_id, r.client_mutation_id AS client_mutation_id, r.trip_id AS trip_id,
+               '' AS kind, r.payload_hash AS payload_hash, r.result_json AS result_json,
+               r.result_revision AS result_revision, r.created_at AS created_at,
+               ROW_NUMBER() OVER (PARTITION BY t.library_id, r.client_mutation_id ORDER BY r.created_at DESC, r.trip_id) AS rn
+        FROM trip_mutation_receipts r
+        JOIN trips t ON t.id = r.trip_id
+      )
+      WHERE rn = 1;
+    DROP TABLE trip_mutation_receipts;
+    ALTER TABLE trip_mutation_receipts_v20 RENAME TO trip_mutation_receipts;
+  `);
+}
+
+/** Short-lived human authorization for agent trip reviews (v21): one live
+ * intent per Library, session, and Trip Document. Arming replaces the previous
+ * intent; the first successful agent review consumes it inside the same
+ * transaction as the advisory write. Additive like every other Trips table. */
+function migrateTripReviewIntents(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trip_review_intents (
+      library_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      trip_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (library_id, session_id, trip_id),
+      FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+/** Agent preference inferences from a base build (ticket 10): a labelled list
+ * on the document, never user-entered context. Additive column so existing
+ * libraries pick it up on the next open. */
+function migrateTripInferences(db: Db): void {
+  const columns = db.prepare(`PRAGMA table_info(trips)`).all() as { name: string }[];
+  if (!columns.some((column) => column.name === "inferences_json")) {
+    db.exec(`ALTER TABLE trips ADD COLUMN inferences_json TEXT NOT NULL DEFAULT '[]'`);
+  }
 }
 
 function migrateSourceAccounts(db: Db): void {

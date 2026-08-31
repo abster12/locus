@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { locusHome } from "../../db/open.ts";
+import { locusHome, newId } from "../../db/open.ts";
 
 export interface Install {
   sessionSecret: string;
@@ -29,19 +29,22 @@ export function sign(secret: string, value: string): string {
 }
 
 export function sessionCookie(install: Install): string {
-  const payload = "desk";
-  return `${payload}.${sign(install.sessionSecret, payload)}`;
+  const id = newId();
+  return `${id}.${sign(install.sessionSecret, id)}`;
 }
 
-export function validSession(install: Install, cookieHeader: string | undefined): boolean {
+export function validSession(install: Install, cookieHeader: string | undefined): string | null {
   const cookie = readCookie(cookieHeader, "locus_session");
-  if (!cookie) return false;
-  const [payload, sig] = cookie.split(".");
-  if (!payload || !sig) return false;
+  if (!cookie) return null;
+  const parts = cookie.split(".");
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  if (!payload || !sig || payload === "desk") return null;
   const expected = sign(install.sessionSecret, payload);
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  return payload;
 }
 
 export function csrfToken(install: Install): string {

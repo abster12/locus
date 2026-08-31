@@ -1,0 +1,26 @@
+# 03: Manage the Trip Document lifecycle
+
+**What to build:** Make the Trips index the durable library of travel plans. Follow the locked prototype and the established Reading/Kitchen page grammar: a restrained editorial trip list with a compact contextual rail, not a dashboard or card grid. The user can filter active and archived Trip Documents, reopen one by activating its full row, rename it, duplicate it, archive or restore it, and delete it through an explicit confirmation. These operations affect only the Trip Document and its private working records; they never delete or rewrite referenced Items, Places, Place Assignments, Reading Documents, Recipe Documents, or source data.
+
+**Blocked by:** 02: Create and reopen a Trip Document.
+
+**Status:** done
+
+- [x] Active and Archived filters list the correct Trip Documents and show data-derived counts once, in the filter control. The contextual rail does not repeat those counts.
+- [x] Each row shows date range or an honest open-date state, title, destination, duration or stop summary, planning state, outstanding work when relevant, and last-updated context—enough to distinguish and reopen the intended plan without opening it first.
+- [x] The entire row is one pointer, touch, and keyboard-accessible navigation target with a useful accessible name. Do not add a redundant Open or View button inside the row.
+- [x] Opening a row navigates to that Trip Document's stable route. Browser Back returns to the index and preserves the applicable Active or Archived filter.
+- [x] The index remains a responsive single primary list with a compact secondary rail; it does not become a dashboard, card grid, or duplicate source of lifecycle state.
+- [x] Rename preserves document identity, content, history, and ownership.
+- [x] Duplicate creates a new identity and independent revision history while copying the private itinerary content; it never inherits an active public share capability.
+- [x] Archive is reversible and retains the complete Trip Document and history.
+- [x] Delete requires a human confirmation and is unavailable to agent adapters.
+- [x] Deleting a Trip Document removes only its owned days, stops, changesets, holes, advisory flags, annotations, and private share metadata; referenced Library entities remain untouched.
+- [x] If the current Trip Document is archived or deleted, Trips routes to a safe remaining document or shows a clear empty Trips state with Plan a trip.
+- [x] Real-database module tests cover every lifecycle transition, filtered list membership and counts, retained history, duplicate independence, deletion boundaries, and Library isolation. HTTP/browser tests cover correct row metadata, Active/Archived filtering, count accuracy, full-row pointer and keyboard activation, stable routing and Back-state restoration, responsive layout, confirmation, forbidden agent paths, and current-selection behavior. Relevant existing tests, typecheck, and build remain green.
+
+## Comments
+
+Lifecycle lives in the Trips module (`server/trips/module.ts`): `renameTrip` (bounded title, identity/days/context preserved, revision +1), `duplicateTrip` (new id, revision 1, active copy, fresh day ids, nothing to inherit since sharing does not exist yet), `archiveTrip`/`restoreTrip` (reversible, idempotent no-ops when already in state, revision bumps, days retained), `deleteTrip` (requires `confirm: "DELETE"` like library delete; explicit trip_days + trips delete so referenced Items/tags/Places survive). Library id always comes from the trusted adapter argument; no agent adapter exists (WebMCP is ticket 08) and the confirm gate is the only delete path. HTTP adds `POST /api/trips/:id/{rename,duplicate,archive,restore,delete}` with global session + CSRF; 400 via the global RejectedPayload mapping. UI: hash query `#/trips?filter=archived` (parsed in `App.tsx`, Back restores it), `Active · N / Archived · N` chips derived from the same fetched collection the rows render, rows keep one `<a aria-label="Open {title}">` with Enter (native) + Space handler, planning state from saved data only (Archived / Early notes at revision 1 / Planning — stop summary is honestly 0 until ticket 04/05), document-page actions Rename (inline control posting to its own endpoint), Duplicate, Archive/Restore, and window.confirm Delete; archive/delete of the open document returns to `#/trips`. Note: "outstanding work" on rows is not yet derivable (holes/drafts arrive in tickets 04–07) so rows omit it rather than fake it.
+
+Commands: `npx tsc --noEmit`, `npm test` (269 pass), `npm run build`, plus `npx vite build` before browser tests. Tests: `tests/trips-module.test.ts` (+4: rename identity/bounds, duplicate independence, archive/restore retention + idempotence + list membership, delete confirm/boundaries vs Items and tags), `tests/trips-http.test.ts` (+1: rename/duplicate/archive/restore/delete, csrf 403, 404s, unconfirmed delete 400, body libraryId/actor ignored), `tests/trips-browser.test.ts` (+1: counts in filter control only, rail without counts, Enter+Space row activation, Back restores archived filter, rename, duplicate, archive→index, restore, confirm-delete to empty state, 320px, writes only `POST /api/trips*`, zero external calls).

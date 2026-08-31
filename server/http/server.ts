@@ -41,6 +41,7 @@ import { importRedditExport } from "../../importers/reddit-export/index.ts";
 import { cancelRunner, deleteProfile, getProgress, isRunning, markDone, markRunning, setProgress, startRunner } from "../../runner/index.ts";
 import { canAccessJob, cancelJobs, enqueueJob, extensionAlive, finishJob, getJob, heartbeat, waitJob } from "../capture/jobs.ts";
 import { frameCheck, linkPreview } from "./preview.ts";
+import { applyTripChanges, archiveTrip, armReviewIntent, createTrip, deleteTrip, dismissTripAdvisory, duplicateTrip, findSharedSnapshot, getShareState, getTrip, getTripHistory, listTrips, previewShareSnapshot, publishShareSnapshot, redoTripChanges, removeTripInference, renameTrip, renderShareHtml, requireClientMutationId, restoreTrip, recordAgentReview, ReviewIntentError, revokeShareSnapshot, searchTripSources, TripConflict, undoTripChanges, updateTripSetup } from "../trips/facade.ts";
 import { filterCitations, type SummarySnapshotV1 } from "../../core/summaries.ts";
 import { classifySourceAccount } from "../source-state.ts";
 import {
@@ -113,7 +114,6 @@ import {
   validSession,
 } from "./session.ts";
 
-const PORT = Number(process.env.LOCUS_PORT || 8787);
 const ROOT = join(import.meta.dirname, "../..");
 
 // Keep ordinary API/capture requests bounded while allowing a documented,
@@ -127,9 +127,13 @@ type RouteFn = (
   url: URL,
   body: unknown,
   params: Record<string, string>,
+  sessionId: string | null,
 ) => Promise<void>;
 
 export function listen(db: Db): { port: number; close: () => Promise<void> } {
+  // Captured per call so parallel test files (each setting LOCUS_PORT before
+  // listen) never share one port; production keeps the 8787 default.
+  const port = Number(process.env.LOCUS_PORT || 8787);
   const install = loadInstall();
   if (!getSetting(db, "refreshOnOpen")) setSetting(db, "refreshOnOpen", "0");
   // Existing libraries get local candidate rows on boot; this never fetches the web.
@@ -156,7 +160,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   };
 
   on("GET", "/api/session", async (_req, res) => {
-    json(res, 200, { csrf: csrfToken(install), port: PORT, libraryId: LOCAL_LIBRARY_ID });
+    json(res, 200, { csrf: csrfToken(install), port, libraryId: LOCAL_LIBRARY_ID });
   });
 
   on("GET", "/api/items", async (_req, res, url) => {
@@ -400,6 +404,164 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     json(res, 200, { removed: clearTonight(db, LOCAL_LIBRARY_ID) });
   });
 
+  // Trips. Library id is always "local" from the trusted session, like Kitchen;
+  // clients never submit library_id and never choose the actor.
+  on("GET", "/api/trips", async (_req, res) => {
+    json(res, 200, { trips: listTrips(db, LOCAL_LIBRARY_ID) });
+  });
+
+  on("POST", "/api/trips", async (_req, res, _url, body) => {
+    requireClientMutationId(body);
+    json(res, 200, { trip: createTrip(db, LOCAL_LIBRARY_ID, body) });
+  });
+
+  // Exact route registered before /api/trips/:id: the dispatcher checks exact
+  // matches first, but the explicit comment keeps the intent visible.
+  on("GET", "/api/trips/sources", async (_req, res, url) => {
+    json(res, 200, searchTripSources(db, LOCAL_LIBRARY_ID, url.searchParams.get("q") ?? ""));
+  });
+
+  on("GET", "/api/trips/:id", async (_req, res, _url, _body, params) => {
+    const trip = getTrip(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  on("POST", "/api/trips/:id/update", async (_req, res, _url, body, params) => {
+    const trip = updateTripSetup(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  // Day Planner mutations. The actor is always the human session — the body
+  // never names one — and stale expected revisions map to 409 through the
+  // shared TripConflict handling below.
+  on("POST", "/api/trips/:id/changes", async (_req, res, _url, body, params) => {
+    const result = applyTripChanges(db, LOCAL_LIBRARY_ID, params.id ?? "", body, "user");
+    if (!result) return json(res, 404, { error: "trip not found" });
+    json(res, 200, result);
+  });
+
+  // Trips WebMCP adapter. The page's agent bridge alone calls this route, so
+  // the module derives actor "agent" from the trusted adapter — agent writes
+  // begin Draft — and the body never names an actor or a Library.
+  on("POST", "/api/trips/:id/agent/changes", async (_req, res, _url, body, params) => {
+    const result = applyTripChanges(db, LOCAL_LIBRARY_ID, params.id ?? "", body, "agent");
+    if (!result) return json(res, 404, { error: "trip not found" });
+    json(res, 200, result);
+  });
+
+  // Human "Ask agent to review" (ticket 14). The intent is stored in sqlite,
+  // bound to the requesting session's validated id, the exact Trip, and the
+  // revision at arm time, and expires after 15 minutes. The body carries no identity.
+  on("POST", "/api/trips/:id/review-intent", async (_req, res, _url, _body, params, sessionId) => {
+    const armed = armReviewIntent(db, LOCAL_LIBRARY_ID, sessionId ?? "", params.id ?? "");
+    if (!armed) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { ok: true, revision: armed.revision });
+  });
+
+  // Agent trip-review advisories (ticket 09/14). Requires a live review intent
+  // armed by the human "Ask agent to review" action on this Trip Document;
+  // validation, the advisory write, and intent consumption are one transaction.
+  on("POST", "/api/trips/:id/agent/review", async (_req, res, _url, body, params, sessionId) => {
+    const result = recordAgentReview(db, LOCAL_LIBRARY_ID, sessionId ?? "", params.id ?? "", body);
+    if (!result) return json(res, 404, { error: "trip not found" });
+    json(res, 200, result);
+  });
+
+  // Human-only dismissal: no /agent/ path exists for this on purpose. The
+  // body carries the standard mutation envelope.
+  on("POST", "/api/trips/:id/advisories/:advisoryId/dismiss", async (_req, res, _url, body, params) => {
+    const trip = dismissTripAdvisory(db, LOCAL_LIBRARY_ID, params.id ?? "", params.advisoryId ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  // Human-only removal of one agent preference inference (ticket 10).
+  on("POST", "/api/trips/:id/inferences/:inferenceId/remove", async (_req, res, _url, body, params) => {
+    const trip = removeTripInference(db, LOCAL_LIBRARY_ID, params.id ?? "", params.inferenceId ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  // Share Snapshots (ticket 11). Preview writes nothing; publish mints a
+  // fresh token and snapshots the document as it stands (update and
+  // republish are the same call); revoke kills the capability. All three are
+  // human-session routes — the raw token only ever exists in the publish
+  // response body, never in the database.
+  on("GET", "/api/trips/:id/share", async (_req, res, _url, _body, params) => {
+    const trip = getTrip(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { shared: getShareState(db, LOCAL_LIBRARY_ID, trip.id) });
+  });
+
+  on("POST", "/api/trips/:id/share/preview", async (_req, res, _url, _body, params) => {
+    const preview = previewShareSnapshot(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!preview) return json(res, 404, { error: "trip not found" });
+    json(res, 200, preview);
+  });
+
+  on("POST", "/api/trips/:id/share/publish", async (_req, res, _url, body, params) => {
+    const result = publishShareSnapshot(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!result) return json(res, 404, { error: "trip not found" });
+    json(res, 200, result);
+  });
+
+  on("POST", "/api/trips/:id/share/revoke", async (_req, res, _url, body, params) => {
+    const revoked = revokeShareSnapshot(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (revoked === null) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { revoked });
+  });
+
+  on("POST", "/api/trips/:id/undo", async (_req, res, _url, body, params) => {
+    const result = undoTripChanges(db, LOCAL_LIBRARY_ID, params.id ?? "", body, "user");
+    if (!result) return json(res, 404, { error: "trip not found" });
+    json(res, 200, result);
+  });
+
+  on("POST", "/api/trips/:id/redo", async (_req, res, _url, body, params) => {
+    const result = redoTripChanges(db, LOCAL_LIBRARY_ID, params.id ?? "", body, "user");
+    if (!result) return json(res, 404, { error: "trip not found" });
+    json(res, 200, result);
+  });
+
+  on("GET", "/api/trips/:id/history", async (_req, res, _url, _body, params) => {
+    const history = getTripHistory(db, LOCAL_LIBRARY_ID, params.id ?? "");
+    if (!history) return json(res, 404, { error: "trip not found" });
+    json(res, 200, history);
+  });
+
+  on("POST", "/api/trips/:id/rename", async (_req, res, _url, body, params) => {
+    const trip = renameTrip(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  on("POST", "/api/trips/:id/duplicate", async (_req, res, _url, body, params) => {
+    const trip = duplicateTrip(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  on("POST", "/api/trips/:id/archive", async (_req, res, _url, body, params) => {
+    const trip = archiveTrip(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  on("POST", "/api/trips/:id/restore", async (_req, res, _url, body, params) => {
+    const trip = restoreTrip(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!trip) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { trip });
+  });
+
+  on("POST", "/api/trips/:id/delete", async (_req, res, _url, body, params) => {
+    // RejectedPayload for a missing envelope or confirm maps to 400 globally.
+    const deleted = deleteTrip(db, LOCAL_LIBRARY_ID, params.id ?? "", body);
+    if (!deleted) return json(res, 404, { error: "trip not found" });
+    json(res, 200, { deleted: true });
+  });
+
   on("GET", "/api/atlas", async (_req, res) => {
     json(res, 200, presentAtlas(db));
   });
@@ -566,15 +728,15 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   });
 
   on("POST", "/api/sources/:source/connect", async (_req, res, _url, body, params) => {
-    await beginCapture(db, res, params?.source ?? "", body);
+    await beginCapture(db, res, params?.source ?? "", body, port);
   });
 
   on("POST", "/api/sources/:source/refresh", async (_req, res, _url, body, params) => {
-    await beginCapture(db, res, params?.source ?? "", body);
+    await beginCapture(db, res, params?.source ?? "", body, port);
   });
 
   on("POST", "/api/sources/:source/resume", async (_req, res, _url, body, params) => {
-    await beginCapture(db, res, params?.source ?? "", body);
+    await beginCapture(db, res, params?.source ?? "", body, port);
   });
 
   on("POST", "/api/sources/:source/cancel", async (_req, res, _url, body, params) => {
@@ -608,7 +770,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!isSourceId(source)) return json(res, 400, { error: "unknown source" });
     const account = ensurePendingAccount(db, source);
     const { token } = issueToken(db, source, account.id);
-    json(res, 200, { token, account, origin: `http://127.0.0.1:${PORT}` });
+    json(res, 200, { token, account, origin: `http://127.0.0.1:${port}` });
   });
 
   on("GET", "/api/sources/:source/health", async (_req, res, url, _body, params) => {
@@ -642,10 +804,10 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const offered = String(asRec(body).token ?? bearer(req) ?? "");
     const existing = offered ? lookupToken(db, offered) : null;
     if (existing && !existing.revokedAt && existing.source === "*") {
-      return json(res, 200, { token: offered, origin: `http://127.0.0.1:${PORT}` });
+      return json(res, 200, { token: offered, origin: `http://127.0.0.1:${port}` });
     }
     const { token } = issueToken(db, "*", null);
-    json(res, 200, { token, origin: `http://127.0.0.1:${PORT}` });
+    json(res, 200, { token, origin: `http://127.0.0.1:${port}` });
   });
 
   on("GET", "/capture/v1/jobs/wait", async (req, res) => {
@@ -762,13 +924,29 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   const server = createServer(async (req, res) => {
     try {
       const host = req.headers.host;
-      if (!allowedHost(host, PORT)) {
+      if (!allowedHost(host, port)) {
         res.writeHead(400).end("bad host");
         return;
       }
       const url = new URL(req.url || "/", `http://${host}`);
       if (req.method === "OPTIONS") {
         res.writeHead(204, corsHeaders(req, url.pathname)).end();
+        return;
+      }
+
+      // Public Share Snapshot page (ticket 11). Deliberately outside /api/:
+      // no session, no cookie, no account. Revoked and unknown tokens get the
+      // same empty 404 with no itinerary payload.
+      if (req.method === "GET" && url.pathname.startsWith("/s/")) {
+        const shared = findSharedSnapshot(db, decodeURIComponent(url.pathname.slice(3)));
+        if (!shared) {
+          res.writeHead(404, { "content-type": "text/html; charset=utf-8" }).end(
+            `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Link unavailable</title></head><body style="font-family:system-ui,sans-serif;color:#6b7176;background:#f1f2ef;margin:0"><main style="max-width:560px;margin:0 auto;padding:60px 20px"><p>This link is no longer available.</p></main></body></html>`,
+          );
+          return;
+        }
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(renderShareHtml(shared.snapshot, shared.updatedAt));
         return;
       }
 
@@ -788,22 +966,19 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       }
       if (mutating && (isApi || isCapture)) console.info(`${req.method} ${url.pathname}`);
 
+      // Validated session id from the signed cookie (unique per issued session);
+      // null when absent/invalid. /api/session is the only route allowed to
+      // proceed without one.
+      const sessionId = isApi ? validSession(install, req.headers.cookie) : null;
+
       if (isApi || isCapture) {
         const origin = req.headers.origin;
-        if (origin && !allowedOrigin(origin, PORT) && !isCapture) {
+        if (origin && !allowedOrigin(origin, port) && !isCapture) {
           res.writeHead(403).end("bad origin");
           return;
         }
         if (isApi) {
-          if (!validSession(install, req.headers.cookie)) {
-            if (url.pathname === "/api/session") {
-              // fall through after cookie set below
-            } else if (!readBodySoon) {
-              // still require session except first /api/session
-            }
-          }
-          const hasSession = validSession(install, req.headers.cookie);
-          if (!hasSession && url.pathname !== "/api/session") {
+          if (!sessionId && url.pathname !== "/api/session") {
             res.writeHead(401, { "set-cookie": cookieHeader(install) }).end(JSON.stringify({ error: "no session" }));
             return;
           }
@@ -817,7 +992,9 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         }
       }
 
-      if (url.pathname === "/api/session" && req.method === "GET") {
+      // Issue a session only when the request has none: rotating a valid
+      // cookie would orphan review intents armed under the previous id.
+      if (url.pathname === "/api/session" && req.method === "GET" && !sessionId) {
         res.setHeader("set-cookie", cookieHeader(install));
       }
 
@@ -825,7 +1002,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       const key = `${req.method} ${url.pathname}`;
       const exact = routes.get(key);
       if (exact) {
-        await exact(req, res, url, body, {});
+        await exact(req, res, url, body, {}, sessionId);
         return;
       }
       for (const m of matchers) {
@@ -836,7 +1013,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         m.keys.forEach((k, i) => {
           params[k] = decodeURIComponent(hit[i + 1] ?? "");
         });
-        await m.fn(req, res, url, body, params);
+        await m.fn(req, res, url, body, params, sessionId);
         return;
       }
 
@@ -846,8 +1023,12 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         json(res, 413, { error: error.message });
         return;
       }
-      if (error instanceof LibraryConflict || error instanceof KitchenConflict || error instanceof AtlasConflict) {
+      if (error instanceof LibraryConflict || error instanceof KitchenConflict || error instanceof AtlasConflict || error instanceof TripConflict) {
         json(res, 409, { error: error.message });
+        return;
+      }
+      if (error instanceof ReviewIntentError) {
+        json(res, 403, { error: error.message });
         return;
       }
       if (error instanceof MissingResource) {
@@ -876,12 +1057,12 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   }
 
   if (getSetting(db, "refreshOnOpen") === "1") {
-    refreshOnOpen(db);
+    refreshOnOpen(db, port);
   }
 
-  server.listen(PORT, "127.0.0.1");
+  server.listen(port, "127.0.0.1");
   return {
-    port: PORT,
+    port,
     close: async () => {
       stopReadingWorker(db);
       stopAtlasWorker(db);
@@ -890,8 +1071,6 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     },
   };
 }
-
-const readBodySoon = false;
 
 function cookieHeader(install: ReturnType<typeof loadInstall>): string {
   return `locus_session=${sessionCookie(install)}; Path=/; HttpOnly; SameSite=Lax`;
@@ -1027,7 +1206,7 @@ async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {
   }
 }
 
-async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body: unknown): Promise<void> {
+async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body: unknown, port: number): Promise<void> {
   if (!isSourceId(sourceRaw)) {
     json(res, 400, { error: "unknown source" });
     return;
@@ -1056,7 +1235,7 @@ async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body
     return;
   }
   const { token } = issueToken(db, sourceRaw, account.id);
-  startRunner({ source: sourceRaw, accountId: account.id, token, baseUrl: `http://127.0.0.1:${PORT}` });
+  startRunner({ source: sourceRaw, accountId: account.id, token, baseUrl: `http://127.0.0.1:${port}` });
   json(res, 200, {
     account,
     via: "runner",
@@ -1224,7 +1403,7 @@ function recoveryTextSafe(code: string): string | null {
   }
 }
 
-function refreshOnOpen(db: Db): void {
+function refreshOnOpen(db: Db, port: number): void {
   const accounts = db
     .prepare(`SELECT id, source FROM source_accounts WHERE account_kind <> 'imported' AND external_id NOT LIKE 'pending:%'`)
     .all() as { id: string; source: string }[];
@@ -1241,7 +1420,7 @@ function refreshOnOpen(db: Db): void {
       continue;
     }
     const { token } = issueToken(db, account.source, account.id);
-    startRunner({ source: account.source, accountId: account.id, token, baseUrl: `http://127.0.0.1:${PORT}` });
+    startRunner({ source: account.source, accountId: account.id, token, baseUrl: `http://127.0.0.1:${port}` });
   }
 }
 

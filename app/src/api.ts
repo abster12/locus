@@ -1,3 +1,7 @@
+// The setup contract is owned by the server codec; these are type-only
+// imports so the browser bundle never executes server policy code.
+import type { TripContext, TripSetupInput } from "../../server/trips/policy.ts";
+
 export type SourceId = "x" | "instagram" | "youtube" | "reddit";
 
 export interface ItemCard {
@@ -238,6 +242,12 @@ export async function boot(): Promise<SessionContext> {
   return s;
 }
 
+function newMutationId(): string {
+  // Every Trip mutation carries a fresh client mutation id so a retry can be
+  // detected server-side without the caller tracking one.
+  return crypto.randomUUID();
+}
+
 export const api = {
   items: (q: string, signal?: AbortSignal) => req<ItemPage>(`/api/items${q ? `?${q}` : ""}`, { signal }),
   allItems: (q = "", signal?: AbortSignal) => allItemPages(q, signal),
@@ -370,6 +380,124 @@ export const api = {
   removeTonight: (entryId: string) =>
     req<{ removed: boolean }>(`/api/kitchen/tonight/${encodeURIComponent(entryId)}/remove`, { method: "POST", body: "{}" }),
   clearTonight: () => req<{ removed: number }>("/api/kitchen/tonight/clear", { method: "POST", body: "{}" }),
+  trips: (signal?: AbortSignal) => req<{ trips: TripSummary[] }>("/api/trips", { signal }),
+  trip: (id: string, signal?: AbortSignal) => req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}`, { signal }),
+  // Caller owns clientMutationId for one logical create. Retries of an
+  // unchanged payload must reuse that id; a new or changed payload gets a
+  // fresh one. This function forwards the body unchanged.
+  createTrip: (body: TripSetupBody & { clientMutationId: string }) =>
+    req<{ trip: TripDocument }>("/api/trips", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // Existing-document Trip mutations carry { expectedRevision, clientMutationId, ...payload }.
+  // Lifecycle helpers still mint a fresh id per call. Planner apply/undo/redo
+  // (and create) leave clientMutationId to the caller so a lost-response retry
+  // can replay instead of colliding on a new id at a stale revision.
+  updateTrip: (id: string, body: TripSetupBody & { expectedRevision: number }) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/update`, {
+      method: "POST",
+      body: JSON.stringify({ ...body, clientMutationId: newMutationId() }),
+    }),
+  renameTrip: (id: string, title: string, expectedRevision: number) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ title, expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  duplicateTrip: (id: string, expectedRevision: number) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/duplicate`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  archiveTrip: (id: string, expectedRevision: number) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  restoreTrip: (id: string, expectedRevision: number) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  deleteTrip: (id: string, expectedRevision: number) =>
+    req<{ deleted: boolean }>(`/api/trips/${encodeURIComponent(id)}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ confirm: "DELETE", expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  applyTripChanges: (id: string, body: { expectedRevision: number; clientMutationId: string; instruction?: string; operations: TripChangeOp[] }) =>
+    req<TripMutationResult>(`/api/trips/${encodeURIComponent(id)}/changes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // WebMCP adapter path: the agent supplies its own clientMutationId, and the
+  // server derives actor "agent" from this trusted route (agent writes begin
+  // Draft). Never used by the human Day Planner. Inferred preferences ride
+  // the same atomic changeset when a base build supplies them.
+  applyTripChangesAsAgent: (
+    id: string,
+    body: { expectedRevision: number; clientMutationId: string; instruction?: string | null; operations: unknown[]; inferredPreferences?: unknown[] },
+  ) =>
+    req<TripMutationResult>(`/api/trips/${encodeURIComponent(id)}/agent/changes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  // WebMCP advisory path: the page's agent bridge calls this only after the
+  // user asked for a review on the visible Trip Document.
+  recordTripReviewAsAgent: (id: string, body: { expectedRevision: number; clientMutationId: string; flags: unknown[] }) =>
+    req<{ trip: TripDocument; replayed: boolean }>(`/api/trips/${encodeURIComponent(id)}/agent/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  armTripReview: (id: string, expectedRevision: number) =>
+    req<{ ok: true; revision: number }>(`/api/trips/${encodeURIComponent(id)}/review-intent`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision }),
+    }),
+  // WebMCP build path: inferred preferences ride the same atomic changeset.
+  removeTripInference: (id: string, inferenceId: string, expectedRevision: number) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/inferences/${encodeURIComponent(inferenceId)}/remove`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  dismissTripAdvisory: (id: string, advisoryId: string, expectedRevision: number) =>
+    req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}/advisories/${encodeURIComponent(advisoryId)}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId() }),
+    }),
+  undoTripChanges: (id: string, expectedRevision: number, clientMutationId: string) =>
+    req<TripMutationResult>(`/api/trips/${encodeURIComponent(id)}/undo`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId }),
+    }),
+  redoTripChanges: (id: string, expectedRevision: number, clientMutationId: string) =>
+    req<TripMutationResult>(`/api/trips/${encodeURIComponent(id)}/redo`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId }),
+    }),
+  tripHistory: (id: string, signal?: AbortSignal) =>
+    req<{ changesets: TripChangesetView[]; canUndo: boolean; canRedo: boolean; dismissedAdvisories: TripAdvisory[] }>(
+      `/api/trips/${encodeURIComponent(id)}/history`,
+      { signal },
+    ),
+  tripSources: (q: string, signal?: AbortSignal) =>
+    req<TripSources>(`/api/trips/sources?q=${encodeURIComponent(q)}`, { signal }),
+  shareState: (id: string, signal?: AbortSignal) =>
+    req<{ shared: TripShareState | null }>(`/api/trips/${encodeURIComponent(id)}/share`, { signal }),
+  sharePreview: (id: string) =>
+    req<{ snapshot: TripShareSnapshot; digest: string; revision: number; shared: TripShareState | null }>(`/api/trips/${encodeURIComponent(id)}/share/preview`, {
+      method: "POST",
+      body: "{}",
+    }),
+  sharePublish: (id: string, expectedRevision: number, digest: string) =>
+    req<{ token: string | null; snapshot: TripShareSnapshot; revision: number; updatedAt: string }>(`/api/trips/${encodeURIComponent(id)}/share/publish`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId(), digest }),
+    }),
+  shareRevoke: (id: string, expectedRevision: number) =>
+    req<{ revoked: boolean }>(`/api/trips/${encodeURIComponent(id)}/share/revoke`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, clientMutationId: newMutationId() }),
+    }),
   atlas: (signal?: AbortSignal) => req<AtlasProjection>("/api/atlas", { signal }),
   atlasPlaces: (q: string, signal?: AbortSignal) =>
     req<{ places: AtlasPlace[] }>(`/api/atlas/places?q=${encodeURIComponent(q)}`, { signal }),
@@ -550,6 +678,207 @@ export interface KitchenIndex {
   counts: { foodSaves: number; structuredRecipes: number; tonight: number };
   sources?: string[];
 }
+
+export interface TripDay {
+  id: string;
+  position: number;
+  date: string | null;
+  label: string;
+  theme: string | null;
+  stops: TripStop[];
+}
+
+export type TripStopContent =
+  | { kind: "item"; itemId: string }
+  | { kind: "place"; placeId: string }
+  | { kind: "outside"; title: string; notes: string | null; url: string | null }
+  | { kind: "hole"; request: string };
+
+export type TripStopResolved =
+  | { kind: "item"; title: string; source: string | null; url: string | null }
+  | { kind: "place"; name: string; kindLabel: string; location: string | null };
+
+export interface TripStop {
+  id: string;
+  dayId: string | null;
+  position: number;
+  content: TripStopContent;
+  resolved: TripStopResolved | null;
+  broken: boolean;
+  state: "confirmed" | "draft";
+  provenance: { actor: string; via: string };
+  publicNotes: string;
+  privateNotes: string;
+  timeWindow: string | null;
+  durationMinutes: number | null;
+  reservation: string | null;
+  storedFacts: string[];
+  alternatives: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TripChangesetView {
+  id: string;
+  tripId: string;
+  kind: "change" | "undo" | "redo";
+  actor: string;
+  instruction: string | null;
+  summary: string;
+  baseRevision: number;
+  resultRevision: number;
+  reversesId: string | null;
+  createdAt: string;
+  undoneAt: string | null;
+}
+
+export interface TripMutationResult {
+  trip: TripDocument;
+  changeset: TripChangesetView;
+  replayed: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+/** Client-facing placement ops: stops are identified by id only; the module
+ * rejects absolute indexes from any adapter. */
+export type TripChangeOp =
+  | {
+      type: "addStop";
+      dayId: string | null;
+      content: TripStopContent;
+      beforeStopId?: string;
+      afterStopId?: string;
+      timeWindow?: string | null;
+      durationMinutes?: number | null;
+    }
+  | {
+      type: "updateStop";
+      stopId: string;
+      content?: TripStopContent;
+      timeWindow?: string | null;
+      durationMinutes?: number | null;
+      publicNotes?: string | null;
+      privateNotes?: string | null;
+      reservation?: string | null;
+      storedFacts?: string[];
+      alternatives?: string[];
+      state?: "confirmed" | "draft";
+    }
+  | { type: "moveStop"; stopId: string; dayId?: string | null; beforeStopId?: string; afterStopId?: string }
+  | { type: "removeStop"; stopId: string }
+  | { type: "updateDay"; dayId: string; theme: string | null };
+
+export interface TripSourceItem {
+  id: string;
+  title: string;
+  source: string | null;
+}
+
+export interface TripSourcePlace {
+  id: string;
+  name: string;
+  kind: string;
+}
+
+export interface TripSources {
+  items: TripSourceItem[];
+  places: TripSourcePlace[];
+}
+
+// Mirror of the server's Share Snapshot allowlist (server/trips/share.ts).
+// Only allowlisted fields exist here; the client never has to filter.
+export interface TripShareStop {
+  name: string;
+  kind: "item" | "place" | "outside" | "hole";
+  timeWindow: string | null;
+  durationMinutes: number | null;
+  notes: string | null;
+  sourceUrl: string | null;
+  location: string | null;
+}
+
+export interface TripShareSnapshot {
+  title: string;
+  destination: string;
+  startDate: string | null;
+  endDate: string | null;
+  durationDays: number;
+  timezone: string | null;
+  days: { label: string; date: string | null; stops: TripShareStop[] }[];
+  unscheduled: TripShareStop[];
+}
+
+export interface TripShareState {
+  revision: number;
+  updatedAt: string;
+}
+
+export type { TripContext };
+
+export type TripAdvisoryCategory = "travel_feasibility" | "strain" | "missing_information";
+export type TripAdvisorySeverity = "info" | "concern" | "urgent";
+
+/** Agent-authored preference inference (ticket 10): a labelled document-level
+ * annotation, never user-entered context. Removable by the human. */
+export interface TripInference {
+  id: string;
+  text: string;
+  basis: string;
+}
+
+export interface TripAdvisory {
+  id: string;
+  tripId: string;
+  reviewedRevision: number;
+  category: TripAdvisoryCategory;
+  severity: TripAdvisorySeverity;
+  opinion: string;
+  rationale: string;
+  dayRefs: string[];
+  stopRefs: string[];
+  actor: string;
+  createdAt: string;
+  dismissedAt: string | null;
+}
+
+export interface TripDocument {
+  id: string;
+  libraryId: string;
+  title: string;
+  destination: string;
+  timezone: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  durationDays: number;
+  travelers: string | null;
+  context: TripContext;
+  inferences: TripInference[];
+  revision: number;
+  archivedAt: string | null;
+  days: TripDay[];
+  unscheduled: TripStop[];
+  advisories: TripAdvisory[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TripSummary {
+  id: string;
+  title: string;
+  destination: string;
+  startDate: string | null;
+  endDate: string | null;
+  durationDays: number;
+  revision: number;
+  archivedAt: string | null;
+  updatedAt: string;
+  draftCount: number;
+  holeCount: number;
+}
+
+// Same wire shape as the authoritative server setup codec input.
+export type TripSetupBody = TripSetupInput;
 
 export interface SummarySnapshot {
   scope: string;

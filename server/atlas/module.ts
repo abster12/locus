@@ -256,6 +256,14 @@ export function searchPlaces(db: Db, libraryId: string, q: string): PlaceView[] 
   return ranked.map((place) => viewPlace(place, byId));
 }
 
+/** Library-scoped single-place projection for referencing modules (Trips).
+ * Returns null for unknown ids and for ids owned by another Library. */
+export function getPlaceView(db: Db, libraryId: string, placeId: string): PlaceView | null {
+  const place = getPlace(db, libraryId, placeId);
+  if (!place) return null;
+  return viewPlace(place, mapPlaces(loadPlaces(db, libraryId)));
+}
+
 export function createPlace(
   db: Db,
   libraryId: string,
