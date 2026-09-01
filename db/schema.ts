@@ -1,6 +1,6 @@
 import type { Db } from "./open.ts";
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 24;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -605,6 +605,8 @@ export function migrateSchema(db: Db): void {
     if (current < 20) migrateTripMutationReceiptsOwnerScope(db);
     if (current < 21) migrateTripReviewIntents(db);
     if (current < 22) migrateKitchenTonightConcurrency(db);
+    if (current < 23) migrateTripShareOwnerToken(db);
+    if (current < 24) migrateTripShareHashOnly(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -908,6 +910,20 @@ function migrateKitchenTonightConcurrency(db: Db): void {
       UNIQUE(library_id, client_mutation_id)
     );
   `);
+}
+
+/** v23 briefly stored a raw owner token. Hash-only is restored in v24. */
+function migrateTripShareOwnerToken(db: Db): void {
+  migrateTripShareHashOnly(db);
+}
+
+/** Capability tokens stay hashed; drop any raw owner-token column. */
+function migrateTripShareHashOnly(db: Db): void {
+  if (!tableExists(db, "trip_share_snapshots")) return;
+  const cols = db.prepare(`PRAGMA table_info(trip_share_snapshots)`).all() as { name: string }[];
+  if (cols.some((column) => column.name === "token")) {
+    db.exec(`ALTER TABLE trip_share_snapshots DROP COLUMN token`);
+  }
 }
 
 /** Agent preference inferences from a base build (ticket 10): a labelled list

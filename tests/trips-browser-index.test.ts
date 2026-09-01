@@ -217,15 +217,15 @@ test("trips browser: create a Trip Document, reopen it, and refresh keeps it", a
     const kyotoHash = await hash();
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Kyoto, Japan", { timeout: 5000 });
     assert.equal(await text(".trip-facts dd"), "Kyoto, Japan");
-    // The document opens on Overview; one card per day carries label and date.
-    await page.waitForSelector(".trip-day-card", { timeout: 5000 });
-    const dayCards = await page.$$eval(".trip-day-card-title", (els) => els.map((el) => el.textContent ?? ""));
-    assert.equal(dayCards.length, 4);
-    dayCards.forEach((rendered, index) => {
+    // The document opens on Overview as a new empty trip: Add first stop, days in the nav.
+    await page.waitForSelector(".trip-empty-trip", { timeout: 5000 });
+    assert.match(await page.$eval(".trip-empty-trip", (el) => el.textContent ?? ""), /Add first stop/);
+    const dayTabs = await page.$$eval(".trip-nav a", (els) => els.map((el) => (el.textContent ?? "").trim()).filter((label) => label.startsWith("Day")));
+    assert.equal(dayTabs.length, 4);
+    dayTabs.forEach((rendered, index) => {
       assert.ok(rendered.includes(`Day ${index + 1}`), rendered);
-      assert.ok(rendered.includes("Oct") && rendered.includes(String(12 + index)), rendered);
+      assert.ok(rendered.includes(String(12 + index)), rendered);
     });
-    assert.equal(await page.$$eval(".trip-day-card-empty", (els) => els.length), 4, "every empty day card is visibly marked");
     assert.equal(await page.$eval(".pagehead .count", (el) => el.textContent), "revision 1");
 
     // Refresh restores the same document from its stable route.
@@ -260,10 +260,10 @@ test("trips browser: create a Trip Document, reopen it, and refresh keeps it", a
     await page.click(".trip-form button[type='submit']");
     await page.waitForFunction(() => /^#\/trips\/[0-9a-f-]+$/.test(location.hash), { timeout: 5000 });
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Kochi food weekend", { timeout: 5000 });
-    await page.waitForSelector(".trip-day-card", { timeout: 5000 });
-    const openCards = await page.$$eval(".trip-day-card-title", (els) => els.map((el) => el.textContent ?? ""));
-    assert.equal(openCards.length, 3);
-    assert.ok(openCards.every((rendered) => rendered.includes("open date")), "duration-only days stay honestly open");
+    await page.waitForSelector(".trip-empty-trip", { timeout: 5000 });
+    const openTabs = await page.$$eval(".trip-nav a", (els) => els.map((el) => (el.textContent ?? "").trim()).filter((label) => label.startsWith("Day")));
+    assert.equal(openTabs.length, 3);
+    assert.ok(openTabs.every((rendered) => !rendered.includes("Oct")), "duration-only days stay honestly open");
     assert.match(await page.$eval(".trip-facts", (el) => el.textContent ?? ""), /3 days · dates open/);
 
     // Direct navigation to a foreign id stays a clean missing state.
@@ -301,10 +301,13 @@ test("trips browser: filters, lifecycle actions, keyboard rows, and confirmed de
     const hash = () => page.evaluate(() => location.hash);
     const waitHash = (target: string) => page.waitForFunction((value) => location.hash === value, { timeout: 5000 }, target);
     const filterChips = () => page.$$eval(".trips-filter .chip", (els) => els.map((el) => (el.textContent ?? "").trim()));
-    // The actions row holds several buttons; always target by label.
-    const clickAction = (label: string) =>
-      page.$$eval(
-        ".trip-detail-actions .btn",
+    // Lifecycle actions live in the document menu; always target by label.
+    const clickAction = async (label: string) => {
+      await page.$eval(".trip-doc-menu", (el) => {
+        (el as HTMLDetailsElement).open = true;
+      });
+      await page.$$eval(
+        ".trip-doc-menu-list .btn",
         (els, wanted) => {
           const button = els.find((el) => el.textContent === wanted) as HTMLButtonElement | undefined;
           if (!button) throw new Error(`no ${wanted} action`);
@@ -312,6 +315,7 @@ test("trips browser: filters, lifecycle actions, keyboard rows, and confirmed de
         },
         label,
       );
+    };
 
     // React controlled inputs need the native value setter + input event.
     const setInput = (selector: string, value: string) => harnessSetInput(page, selector, value);
@@ -352,7 +356,8 @@ test("trips browser: filters, lifecycle actions, keyboard rows, and confirmed de
     await page.click(".trip-rename .btn.primary");
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Kyoto in October", { timeout: 5000 });
     assert.equal(await page.$eval(".pagehead .count", (el) => el.textContent), "revision 2");
-    const renamedDays = await page.$$eval(".trip-day-card-title", (els) => els.map((el) => el.textContent ?? ""));
+    await page.waitForSelector(".trip-empty-trip", { timeout: 5000 });
+    const renamedDays = await page.$$eval(".trip-nav a", (els) => els.map((el) => (el.textContent ?? "").trim()).filter((label) => label.startsWith("Day")));
     assert.equal(renamedDays.length, 4, "rename keeps every day on the overview");
 
     await page.click(".trips-pagehead a[href='#/trips']");
@@ -408,11 +413,11 @@ test("trips browser: filters, lifecycle actions, keyboard rows, and confirmed de
     await page.click(".trip-row");
     await waitHash(goaHash);
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Goa", { timeout: 5000 });
-    const restoreButton = await page.$$eval(".trip-detail-actions .btn", (els) => els.map((el) => el.textContent));
+    const restoreButton = await page.$$eval(".trip-doc-menu-list .btn", (els) => els.map((el) => el.textContent));
     assert.ok(restoreButton.includes("Restore"), "restorable document offers Restore");
     await clickAction("Restore");
     await page.waitForFunction(() => {
-      const buttons = [...document.querySelectorAll(".trip-detail-actions .btn")];
+      const buttons = [...document.querySelectorAll(".trip-doc-menu-list .btn")];
       return buttons.some((el) => el.textContent === "Archive");
     }, { timeout: 5000 });
     const chips = await page.$$eval(".pagehead .chip", (els) => els.map((el) => el.textContent));
@@ -421,10 +426,7 @@ test("trips browser: filters, lifecycle actions, keyboard rows, and confirmed de
     // Duplicate creates a fresh document with its own revision history.
     await page.goto(`${base}${kyotoHash}`, { waitUntil: "networkidle0" });
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Kyoto in October", { timeout: 5000 });
-    await page.$$eval(".trip-detail-actions .btn", (els) => {
-      const button = els.find((el) => el.textContent === "Duplicate") as HTMLButtonElement;
-      button.click();
-    });
+    await clickAction("Duplicate");
     await page.waitForFunction(
       (previous) => /^#\/trips\/[0-9a-f-]+$/.test(location.hash) && location.hash !== previous,
       { timeout: 5000 },
@@ -434,20 +436,20 @@ test("trips browser: filters, lifecycle actions, keyboard rows, and confirmed de
     assert.equal(await page.$eval(".pagehead .count", (el) => el.textContent), "revision 1");
 
     // Confirmed deletes remove trip documents one by one until the empty state.
-    await page.click(".trip-detail-actions .btn.danger");
+    await clickAction("Delete");
     await waitHash("#/trips");
     await page.waitForFunction(() => document.querySelectorAll(".trip-row").length === 2, { timeout: 5000 });
     assert.deepEqual(await filterChips(), ["Active · 2", "Archived · 0"]);
 
     await page.goto(`${base}${goaHash}`, { waitUntil: "networkidle0" });
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Goa", { timeout: 5000 });
-    await page.click(".trip-detail-actions .btn.danger");
+    await clickAction("Delete");
     await waitHash("#/trips");
     await page.waitForFunction(() => document.querySelectorAll(".trip-row").length === 1, { timeout: 5000 });
 
     await page.goto(`${base}${kyotoHash}`, { waitUntil: "networkidle0" });
     await page.waitForFunction(() => document.querySelector(".trips h1")?.textContent === "Kyoto in October", { timeout: 5000 });
-    await page.click(".trip-detail-actions .btn.danger");
+    await clickAction("Delete");
     await waitHash("#/trips");
     await page.waitForFunction(() => document.querySelector(".empty")?.textContent?.includes("No Trip Documents yet"), { timeout: 5000 });
     assert.ok(await page.$(".trips-tools .btn.primary"), "empty state keeps Plan a trip");

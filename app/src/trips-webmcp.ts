@@ -247,6 +247,7 @@ const OPERATIONS_SCHEMA = {
           durationMinutes: DURATION_FIELD,
           publicNotes: NOTES_FIELD,
           privateNotes: NOTES_FIELD,
+          state: { type: "string", enum: ["confirmed", "draft"] },
         },
         required: ["type", "dayId", "content"],
         additionalProperties: false,

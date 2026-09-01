@@ -234,10 +234,10 @@ function applyOne(db: Db, libraryId: string, tripId: string, at: string, actor: 
         index,
       );
       const id = newId();
-      // Human-created stops begin Confirmed; agent-authored content waits in
-      // Draft until a human keeps it (spec stories 25–26).
+      // Human omitted/Confirmed → Confirmed; human Draft stays Draft under
+      // manual provenance. Agent adds are always Draft, even if Confirmed is requested.
       const isAgent = actor !== "user";
-      const state = isAgent ? "draft" : "confirmed";
+      const state = isAgent ? "draft" : (op.state ?? "confirmed");
       const provenance: TripStopProvenance = { actor, via: isAgent ? "agent" : "manual" };
       db.prepare(
         `INSERT INTO trip_stops (id, trip_id, day_id, position, content_json, state, provenance_json, public_notes, private_notes, time_window, duration_minutes, created_at, updated_at)

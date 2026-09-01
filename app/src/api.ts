@@ -776,6 +776,9 @@ export type TripChangeOp =
       afterStopId?: string;
       timeWindow?: string | null;
       durationMinutes?: number | null;
+      publicNotes?: string | null;
+      privateNotes?: string | null;
+      state?: "confirmed" | "draft";
     }
   | {
       type: "updateStop";

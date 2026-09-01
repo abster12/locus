@@ -4,8 +4,45 @@ import type { TripDocument } from "./api.ts";
 
 /** Overview is a read-only projection: identity, health from saved data only,
  * and one card per day. Conflicts come only from overlapping user-entered time windows. */
-export function OverviewView({ trip }: { trip: TripDocument }) {
+export function OverviewView({ trip, onAddFirstStop }: { trip: TripDocument; onAddFirstStop: () => void }) {
   const overview = projectTripOverview(trip);
+  const emptyTrip = trip.days.every((day) => day.stops.length === 0) && trip.unscheduled.length === 0;
+  if (emptyTrip) {
+    return (
+      <section className="trip-overview" aria-label="Overview">
+        <div className="trip-empty-trip">
+          <div className="trip-empty-trip-main">
+            <div className="trip-empty-mark" aria-hidden="true">
+              ＋
+            </div>
+            <h2>Start with the first day</h2>
+            <p>Your Trip Document is ready. Add a stop from your Library, enter something outside Locus, or leave a hole for later. Nothing is generated until you ask.</p>
+            <button type="button" className="btn primary" aria-haspopup="dialog" onClick={onAddFirstStop}>
+              Add first stop
+            </button>
+          </div>
+          <aside className="trip-getting-started" aria-label="Getting started">
+            <h3>A new Trip Document</h3>
+            <p>The durable plan already exists. These are useful next steps, not required setup.</p>
+            <ol className="trip-start-list">
+              <li>
+                <b>Add a day theme</b>
+                <p>A short phrase such as “East Kyoto” gives the day a useful shape.</p>
+              </li>
+              <li>
+                <b>Add known stops</b>
+                <p>Use saved Items and Places or enter outside content deliberately.</p>
+              </li>
+              <li>
+                <b>Ask when useful</b>
+                <p>Your agent can fill a hole, present three options, or review the saved plan.</p>
+              </li>
+            </ol>
+          </aside>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="trip-overview" aria-label="Overview">
       <div className="trip-health" aria-label="Trip health">

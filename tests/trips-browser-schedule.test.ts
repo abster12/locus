@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { launchBrowser, setInput as harnessSetInput, startServer, tempDb, trackTraffic } from "./trips-browser-harness.ts";
+import { applyTripChanges, getTrip } from "../server/trips/module.ts";
+import { chooseAddSource, launchBrowser, setInput as harnessSetInput, startServer, tempDb, trackTraffic } from "./trips-browser-harness.ts";
 
 process.env.NODE_ENV = "production";
 process.env.LOCUS_NO_VITE = "1";
 process.env.LOCUS_READING_WORKER = "0";
-process.env.LOCUS_PORT = "8811";
+process.env.LOCUS_PORT = "8821";
 
 
 test("trips browser: day planner adds, keyboard-moves, unschedules, undoes, and keeps stops on refresh", async () => {
@@ -21,17 +22,22 @@ test("trips browser: day planner adds, keyboard-moves, unschedules, undoes, and 
     const setInput = (selector: string, value: string) => harnessSetInput(page, selector, value);
     const dayTitles = () => page.$$eval(".trip-day:not(.trip-unscheduled) .trip-stop-title", (els) => els.map((el) => el.textContent ?? ""));
     const unscheduledTitles = () => page.$$eval(".trip-unscheduled .trip-stop-title", (els) => els.map((el) => el.textContent ?? ""));
-    const clickPlannerTool = (label: string) =>
-      page.$$eval(
-        ".trip-planner-tools .btn",
-        (els, wanted) => {
-          const button = els.find((el) => el.textContent === wanted) as HTMLButtonElement | undefined;
-          if (!button) throw new Error(`no ${wanted} button`);
-          if (button.disabled) throw new Error(`${wanted} is disabled`);
-          button.click();
-        },
-        label,
-      );
+    const clickUndo = () =>
+      page.$eval(".trip-undo", (el) => {
+        const button = el as HTMLButtonElement;
+        if (button.disabled) throw new Error("Undo is disabled");
+        button.click();
+      });
+    const clickRedo = async () => {
+      await page.$eval(".trip-history", (el) => {
+        (el as HTMLDetailsElement).open = true;
+      });
+      await page.$eval(".trip-redo", (el) => {
+        const button = el as HTMLButtonElement;
+        if (button.disabled) throw new Error("Redo is disabled");
+        button.click();
+      });
+    };
     const openFirstDay = async () => {
       await page.$$eval(".trip-nav a", (els) => {
         const tab = els.find((el) => el.textContent?.startsWith("Day 1"));
@@ -54,33 +60,44 @@ test("trips browser: day planner adds, keyboard-moves, unschedules, undoes, and 
     await page.waitForSelector(".trip-empty-card", { timeout: 5000 });
 
     // The empty-day screen: deliberate, with manual actions and no agent call.
-    const emptyActions = await page.$$eval(".trip-empty-actions button", (els) => els.map((el) => el.textContent ?? ""));
-    assert.deepEqual(emptyActions, ["Add from Library", "Add a placeholder", "Ask for three opinions"]);
+    const emptyActions = await page.$$eval(".trip-empty-actions button", (els) => els.map((el) => (el.textContent ?? "").trim()));
+    assert.deepEqual(emptyActions, ["Add stop", "Ask agent for options"]);
     const focusedAdds = await page.$$eval(".trip-day.trip-day-open button", (els) =>
-      els.map((el) => (el.textContent ?? "").trim()).filter((label) => label === "Add from Library" || label === "Add a placeholder"),
+      els.map((el) => (el.textContent ?? "").trim()).filter((label) => label === "Add stop"),
     );
-    assert.deepEqual(focusedAdds, ["Add from Library", "Add a placeholder"], "empty-day Library and placeholder appear once");
-    assert.match(await page.$eval(".trip-empty-card", (el) => el.textContent ?? ""), /Nothing is planned for Day 1/);
+    assert.deepEqual(focusedAdds, ["Add stop"], "empty-day Add stop appears once");
+    const headerAdds = await page.$$eval(".trip-day.trip-day-open .trip-day-head button", (els) =>
+      els.map((el) => (el.textContent ?? "").trim()).filter((label) => label === "Add stop"),
+    );
+    assert.deepEqual(headerAdds, [], "empty-day header does not repeat Add stop");
+    assert.deepEqual(
+      await page.$$eval(".trip-unscheduled button", (els) => els.map((el) => (el.textContent ?? "").trim()).filter((label) => label === "Add stop")),
+      ["Add stop"],
+      "Unscheduled exposes one Add stop",
+    );
+    assert.match(await page.$eval(".trip-empty-card", (el) => el.textContent ?? ""), /Opening this day never starts inference/);
+    assert.ok(await page.$(".trip-unscheduled"), "empty day surfaces Unscheduled");
     await page.$eval(".trip-empty-actions", (root) => {
-      const ask = [...root.querySelectorAll<HTMLButtonElement>("button")].find((el) => el.textContent === "Ask for three opinions");
-      if (!ask) throw new Error("no Ask for three opinions button");
+      const ask = [...root.querySelectorAll<HTMLButtonElement>("button")].find((el) => el.textContent === "Ask agent for options");
+      if (!ask) throw new Error("no Ask agent for options button");
       ask.click();
     });
     await page.waitForFunction(() => document.querySelector(".trip-live")?.textContent?.includes("No agent was called"), { timeout: 5000 });
     assert.equal(writes.length, writesAfterCreate, "opening the empty day and asking for opinions mutates nothing");
 
-    // Add a placeholder to Day 1 through the visible form.
+    // Add outside content to Day 1 through the unified dialog.
     let stopCount = 0;
     const addStop = async (title: string) => {
       stopCount += 1;
-      await page.$$eval(".trip-add-btn", (els) => {
-        const button = els.find((el) => el.textContent === "Add a placeholder") as HTMLElement | undefined;
-        if (!button) throw new Error("no Add a placeholder button");
+      await page.$$eval(".trip-day:not(.trip-unscheduled) button", (els) => {
+        const button = els.find((el) => (el.textContent ?? "").trim() === "Add stop") as HTMLElement | undefined;
+        if (!button) throw new Error("no Add stop button");
         button.click();
       });
-      await page.waitForSelector(".trip-add-form input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
-      await setInput(".trip-add-form input[placeholder='e.g. Nishiki Market']", title);
-      await page.click(".trip-add-form button[type='submit']");
+      await chooseAddSource(page, "Add outside content");
+      await page.waitForSelector(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
+      await setInput(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", title);
+      await page.click(".trip-add-dialog button[type='submit']");
       await page.waitForFunction(
         (n) => document.querySelectorAll(".trip-stop-title").length >= n,
         { timeout: 5000 },
@@ -91,20 +108,116 @@ test("trips browser: day planner adds, keyboard-moves, unschedules, undoes, and 
     await addStop("Kiyomizu-dera");
     await page.waitForFunction(() => document.querySelectorAll(".trip-day:not(.trip-unscheduled) .trip-stop-title").length === 2, { timeout: 5000 });
     assert.deepEqual(await dayTitles(), ["Nishiki Market", "Kiyomizu-dera"]);
-    const states = await page.$$eval(".trip-stop-state", (els) => els.map((el) => el.textContent ?? ""));
-    assert.ok(states.every((state) => state === "Confirmed"), "human stops read as Confirmed text, not just color");
+    assert.equal(await page.$(".trip-stop-state"), null, "Confirmed cards have no persistent Confirmed pill");
+    assert.equal(await page.$('[aria-label="Move Kiyomizu-dera up"]'), null, "no persistent Move up");
+    assert.equal(await page.$('[aria-label="Move Kiyomizu-dera down"]'), null, "no persistent Move down");
 
-    // Keyboard move: focus the Move up control of the second stop and press Enter.
-    await page.focus('[aria-label="Move Kiyomizu-dera up"]');
-    await page.keyboard.press("Enter");
-    await page.waitForFunction(
-      () => document.querySelector(".trip-day:not(.trip-unscheduled) .trip-stop-title")?.textContent === "Kiyomizu-dera",
-      { timeout: 5000 },
+    const handlePoint = (title: string) =>
+      page.$eval(`[aria-label="Drag ${title} to reorder"]`, (el) => {
+        const box = el.getBoundingClientRect();
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      });
+    const rowPoint = (title: string, where: "before" | "after") =>
+      page.$$eval(
+        ".trip-day:not(.trip-unscheduled) .trip-stop",
+        (els, wanted, edge) => {
+          const row = els.find((el) => el.querySelector(".trip-stop-title")?.textContent === wanted);
+          if (!row) throw new Error(`no ${wanted}`);
+          const box = row.getBoundingClientRect();
+          return { x: box.x + box.width / 2, y: edge === "before" ? box.y + 8 : box.y + box.height - 8 };
+        },
+        title,
+        where,
+      );
+    const waitDayOrder = (order: string[]) =>
+      page.waitForFunction(
+        (wanted) =>
+          JSON.stringify([...document.querySelectorAll(".trip-day:not(.trip-unscheduled) .trip-stop-title")].map((el) => el.textContent ?? "")) ===
+          JSON.stringify(wanted),
+        { timeout: 5000 },
+        order,
+      );
+
+    // Pointer drag: second card onto the first. Same moveStop as keyboard/menu.
+    const pointerFrom = await handlePoint("Kiyomizu-dera");
+    const pointerTo = await rowPoint("Nishiki Market", "before");
+    await page.mouse.move(pointerFrom.x, pointerFrom.y);
+    await page.mouse.down();
+    await page.mouse.move(pointerTo.x, pointerTo.y, { steps: 12 });
+    await page.mouse.up();
+    await waitDayOrder(["Kiyomizu-dera", "Nishiki Market"]);
+    assert.equal(await page.$(".trip-stop-dialog[open]"), null, "pointer drag does not open details");
+    assert.match(await page.$eval(".trip-live", (el) => el.textContent ?? ""), /Moved Kiyomizu-dera/);
+    await clickUndo();
+    await waitDayOrder(["Nishiki Market", "Kiyomizu-dera"]);
+
+    // Touch drag uses the same handle and anchors.
+    const touchFrom = await handlePoint("Kiyomizu-dera");
+    const touchTo = await rowPoint("Nishiki Market", "before");
+    const touch = await page.touchscreen.touchStart(touchFrom.x, touchFrom.y);
+    await touch.move(touchTo.x, touchTo.y);
+    await touch.end();
+    await waitDayOrder(["Kiyomizu-dera", "Nishiki Market"]);
+    await clickUndo();
+    await waitDayOrder(["Nishiki Market", "Kiyomizu-dera"]);
+
+    // Keyboard lift / move before / drop.
+    await page.focus('[aria-label="Drag Kiyomizu-dera to reorder"]');
+    await page.keyboard.press(" ");
+    await page.waitForFunction(() => document.querySelector(".trip-live")?.textContent?.includes("Lifted Kiyomizu-dera"), { timeout: 5000 });
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press(" ");
+    await waitDayOrder(["Kiyomizu-dera", "Nishiki Market"]);
+    await clickUndo();
+    await waitDayOrder(["Nishiki Market", "Kiyomizu-dera"]);
+
+    // Escape cancels an active lift and writes nothing.
+    const writesBeforeCancel = writes.length;
+    await page.focus('[aria-label="Drag Kiyomizu-dera to reorder"]');
+    await page.keyboard.press(" ");
+    await page.waitForFunction(() => document.querySelector(".trip-live")?.textContent?.includes("Lifted Kiyomizu-dera"), { timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.querySelector(".trip-live")?.textContent?.includes("Cancelled reordering Kiyomizu-dera"), { timeout: 5000 });
+    assert.deepEqual(await dayTitles(), ["Nishiki Market", "Kiyomizu-dera"]);
+    assert.equal(writes.length, writesBeforeCancel, "Escape writes nothing");
+    await page.click('[aria-label="Drag Kiyomizu-dera to reorder"]');
+    assert.equal(await page.$(".trip-stop-dialog[open]"), null, "drag handle click does not open details");
+
+    // A stale write keeps the saved order and announces the failure.
+    const tripId = await page.evaluate(() => location.hash.match(/trips\/([0-9a-f-]+)/)?.[1] ?? "");
+    const snapshot = getTrip(database, "local", tripId)!;
+    assert.ok(
+      applyTripChanges(
+        database,
+        "local",
+        tripId,
+        {
+          expectedRevision: snapshot.revision,
+          clientMutationId: "stale-bump",
+          operations: [{ type: "updateDay", dayId: snapshot.days[0]!.id, theme: "east" }],
+        },
+        "user",
+      ),
     );
-    assert.deepEqual(await dayTitles(), ["Kiyomizu-dera", "Nishiki Market"]);
+    await page.focus('[aria-label="Drag Kiyomizu-dera to reorder"]');
+    await page.keyboard.press(" ");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press(" ");
+    await page.waitForSelector(".bad", { timeout: 5000 });
+    assert.match(await page.$eval(".bad", (el) => el.textContent ?? ""), /revision/);
+    assert.deepEqual(await dayTitles(), ["Nishiki Market", "Kiyomizu-dera"]);
+    await page.reload({ waitUntil: "networkidle0" });
+    await page.waitForSelector(".trip-planner", { timeout: 5000 });
+    await waitDayOrder(["Nishiki Market", "Kiyomizu-dera"]);
 
-    // Move to Unscheduled through the stop's own controls.
-    await page.click('[aria-label="Move Kiyomizu-dera to another day"]');
+    // Menu Place before is the non-drag keyboard fallback.
+    await page.click('[aria-label="Actions for Kiyomizu-dera"]');
+    await page.focus('[aria-label="Place Kiyomizu-dera before Nishiki Market"]');
+    await page.keyboard.press("Enter");
+    await waitDayOrder(["Kiyomizu-dera", "Nishiki Market"]);
+
+    // Move to Unscheduled through the stop's contextual menu.
+    await page.click('[aria-label="Actions for Kiyomizu-dera"]');
     await page.click('[aria-label="Move Kiyomizu-dera to Unscheduled"]');
     await page.waitForFunction(() => document.querySelector(".trip-unscheduled .trip-stop-title")?.textContent === "Kiyomizu-dera", { timeout: 5000 });
     assert.deepEqual(await dayTitles(), ["Nishiki Market"]);
@@ -112,14 +225,16 @@ test("trips browser: day planner adds, keyboard-moves, unschedules, undoes, and 
     assert.match(await page.$eval(".trip-live", (el) => el.textContent ?? ""), /Moved Kiyomizu-dera to Unscheduled/);
 
     // Undo and Redo as complete actions.
-    await clickPlannerTool("Undo");
+    await clickUndo();
     await page.waitForFunction(() => document.querySelectorAll(".trip-unscheduled .trip-stop-title").length === 0, { timeout: 5000 });
     assert.deepEqual(await dayTitles(), ["Kiyomizu-dera", "Nishiki Market"]);
-    await clickPlannerTool("Redo");
+    await clickRedo();
     await page.waitForFunction(() => document.querySelector(".trip-unscheduled .trip-stop-title")?.textContent === "Kiyomizu-dera", { timeout: 5000 });
 
     // History lists the changesets with actor and time.
-    await page.click(".trip-history summary");
+    await page.$eval(".trip-history", (el) => {
+      (el as HTMLDetailsElement).open = true;
+    });
     await page.waitForSelector(".trip-history-list li", { timeout: 5000 });
     const historyRows = await page.$$eval(".trip-history-list li", (els) => els.map((el) => el.textContent ?? ""));
     assert.ok(historyRows.length >= 5, "history covers every changeset");
@@ -170,19 +285,16 @@ test("trips browser: overview, empty-day screen, schedule projections stay consi
       await page.waitForFunction(() => /view=/.test(location.hash), { timeout: 5000 });
     };
     const addStop = async (title: string, timeWindow: string | null) => {
-      await page.$$eval(
-        ".trip-add-btn",
-        (els, wanted) => {
-          const button = els.find((el) => el.textContent === wanted) as HTMLElement | undefined;
-          if (!button) throw new Error(`no ${wanted} button`);
-          button.click();
-        },
-        "Add a placeholder",
-      );
-      await page.waitForSelector(".trip-add-form input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
-      await setInput(".trip-add-form input[placeholder='e.g. Nishiki Market']", title);
-      if (timeWindow) await setInput(".trip-add-form input[placeholder='e.g. 09:00–11:00']", timeWindow);
-      await page.click(".trip-add-form button[type='submit']");
+      await page.$$eval(".trip-day:not(.trip-unscheduled) button", (els) => {
+        const button = els.find((el) => (el.textContent ?? "").trim() === "Add stop") as HTMLElement | undefined;
+        if (!button) throw new Error("no Add stop button");
+        button.click();
+      });
+      await chooseAddSource(page, "Add outside content");
+      await page.waitForSelector(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
+      await setInput(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", title);
+      if (timeWindow) await setInput(".trip-add-dialog input[placeholder='e.g. 09:00–11:00']", timeWindow);
+      await page.click(".trip-add-dialog button[type='submit']");
       await page.waitForFunction(
         (name) => [...document.querySelectorAll(".trip-stop-title")].some((el) => el.textContent === name),
         { timeout: 5000 },
@@ -213,6 +325,9 @@ test("trips browser: overview, empty-day screen, schedule projections stay consi
     // Opening the document performed no mutation; the nav marks Overview current.
     assert.equal(writes.length, writesAfterCreate);
     assert.equal(await page.$eval(".trip-nav a[href$='view=overview']", (el) => el.getAttribute("aria-current")), "true");
+    assert.match(await page.$eval(".trip-overview", (el) => el.textContent ?? ""), /Add first stop/);
+    assert.match(await page.$eval(".trip-overview", (el) => el.textContent ?? ""), /Nothing is generated until you ask/);
+    assert.equal(await page.$(".health-item"), null, "new empty trip does not start with health stats");
 
     // Day 1: two overlapping timed stops and one untimed stop.
     await clickTab("Day 1");
@@ -250,7 +365,7 @@ test("trips browser: overview, empty-day screen, schedule projections stay consi
       link.click();
     });
     await page.waitForSelector(".trip-empty-card", { timeout: 5000 });
-    assert.match(await page.$eval(".trip-empty-card", (el) => el.textContent ?? ""), /Nothing is planned for Day 2/);
+    assert.match(await page.$eval(".trip-empty-card", (el) => el.textContent ?? ""), /Opening this day never starts inference/);
     assert.ok(await page.$(".trip-unscheduled"), "Unscheduled stays visible alongside the empty day");
     assert.equal(writes.length, writesBeforeEmpty, "opening an empty day mutates nothing");
 

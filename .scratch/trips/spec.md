@@ -49,17 +49,17 @@ AI remains user-driven. Opening Trips, reopening a Trip Document, switching view
 15. As a traveler, I want the Day Planner to be the primary editing surface.
 16. As a traveler, I want Overview to summarize every day with date, theme, time range, stop count, anchors, holes, and conflicts.
 17. As a traveler, I want Schedule to show timed stops from the same Trip Document without becoming a second calendar model.
-18. As a traveler, I want an empty day to be a useful intentional state with Add from Library, Add a placeholder, Ask for three opinions, and relevant Unscheduled possibilities.
+18. As a traveler, I want an empty trip and empty day to be useful intentional states with one clear Add stop flow, an explicit Ask agent for options action, and relevant Unscheduled possibilities.
 19. As a traveler, I want opening an empty day to perform no inference.
-20. As a traveler, I want to add, edit, remove, reorder, and move stops manually, including moves between days and Unscheduled.
-21. As a traveler, I want a compact default stop row and progressively disclosed details for sources, addresses, reservations, notes, evidence, and alternatives.
+20. As a traveler, I want to add, edit, remove, drag to reorder, and move stops manually, including moves between days and Unscheduled, with equivalent keyboard controls.
+21. As a traveler, I want each compact stop card to open its progressively disclosed details from the whole card, while links, drag handles, and contextual actions keep their own behavior.
 22. As a traveler, I want Item and Place references to resolve authoritative Library data rather than copy it.
 23. As a traveler, I want missing referenced Items to remain visible as broken references instead of silently disappearing.
 24. As a traveler, I want outside content bounded, sanitized, visibly distinct, and never promoted to an Item automatically.
 
 ### Drafts, holes, and recommendations
 
-25. As a traveler, I want human-created stops Confirmed and agent-created or replaced stops Draft.
+25. As a traveler, I want to add a stop as Confirmed or deliberately save it as Draft, while agent-created or replaced stops always begin Draft.
 26. As a traveler, I want to keep or remove individual Drafts and Keep All currently visible Drafts in one human action.
 27. As a traveler, I want a hole to preserve an unresolved need at an exact day and order.
 28. As a traveler, I want an exact instruction such as “move Nishiki to Wednesday” applied directly after revision checks.
@@ -84,13 +84,13 @@ AI remains user-driven. Opening Trips, reopening a Trip Document, switching view
 41. As a Locus user, I want stale, invalid, or partially invalid writes to leave the document unchanged.
 42. As a Locus user, I want retries idempotent through a client mutation id.
 43. As a Locus user, I want one agent instruction represented as one atomic Trip Changeset.
-44. As a Locus user, I want Undo and Redo to operate on complete changesets.
+44. As a Locus user, I want Undo and Redo to operate on complete changesets and remain available as recovery actions without dominating the planner.
 45. As a Locus user, I want history to show actor, time, instruction when present, and a bounded before/after summary.
 46. As a Locus user, I want actor identity derived by the trusted adapter rather than accepted from tool input.
 
 ### Sharing and exports
 
-47. As a hosted user, I want to preview and publish a sanitized read-only Share Snapshot through an explicit human action.
+47. As a hosted user, I want one Share action to preview and create a sanitized read-only link, then copy that same link directly on later use.
 48. As a hosted user, I want private captions, Library notes, private trip notes, internal identifiers, agent instructions, and history excluded.
 49. As a hosted user, I want private edits to remain private until I explicitly update the shared snapshot.
 50. As a hosted user, I want to revoke a capability link immediately.
@@ -100,7 +100,7 @@ AI remains user-driven. Opening Trips, reopening a Trip Document, switching view
 
 ### Accessibility and safety
 
-54. As a mobile or keyboard user, I want every drag operation to have explicit Add, Move, Place Before/After, Replace, and Remove controls.
+54. As a mobile or keyboard user, I want drag to be the primary pointer reordering interaction while explicit Move, Place Before/After, Replace, and Remove controls provide an equivalent accessible path.
 55. As a screen-reader user, I want Draft, Confirmed, stale, conflict, broken-reference, provenance, and Agent opinion states exposed as text.
 56. As a user with reduced motion enabled, I want meaningful feedback without unnecessary animation.
 57. As a hosted user, I want every private read and mutation authorized against my authenticated Library.
@@ -121,7 +121,7 @@ AI remains user-driven. Opening Trips, reopening a Trip Document, switching view
 - The visible + New menu is labelled, keyboard accessible, and available across primary Locus pages. It is not a hamburger or unlabeled icon.
 - + New contains Plan a trip, Save a link, and Make a saved dish cookable. Each entry hands off to the owning module and does not duplicate its policy.
 - Plan a trip is also the primary contextual action on the Trips index and empty state.
-- The locked prototype Direction A is authoritative for the Trips index and Trip Document layouts. Do not restore discarded variants or prototype design controls.
+- The locked prototype Direction A is authoritative for the Trips index and Trip Document layouts. The approved end-to-end states live in `.scratch/trips/ux-options-prototype.html`; its flow and hierarchy are the implementation reference, while production components and tokens remain the source of truth for code.
 
 ### Deep module seam
 
@@ -164,7 +164,8 @@ TripAdvisory {
 }
 ```
 
-- Human-created stops begin Confirmed. Agent-created stops and replacements begin Draft.
+- Human-created stops begin Confirmed when no state is requested and may be deliberately saved as Draft. Agent-created stops and replacements always begin Draft, regardless of a requested state.
+- Only a human may confirm a Draft. A human-created Draft keeps human/manual provenance; Draft describes review state, not authorship.
 - A mechanical agent move of a Confirmed stop under an exact instruction may retain Confirmed state while recording agent provenance.
 - Archive is reversible and retains history. Duplicate creates a new identity and no active share.
 - Trip deletion removes trip-owned data only.
@@ -176,6 +177,19 @@ TripAdvisory {
 - Deterministic validation reports only conditions derivable from saved data: ordering errors, overlaps, duplicate identities, reservation conflicts, holes, broken references, and stale user-stored facts.
 - Locus does not invent travel durations, load thresholds, or route facts.
 - Undo and Redo operate on complete changesets and run validation on the resulting document.
+
+### Approved Direction A planner experience
+
+- A Trip Day shows its theme once. Theme editing is available from that single presentation rather than a duplicated label and input.
+- The planner exposes one primary **Add stop** action. It opens a focused flow for choosing from the Library, entering outside content, or adding a hole; the day or Unscheduled placement is explicit in the form.
+- Library and outside-content forms offer **Add stop** and **Save as Draft**. Both actions use the same bounded insertion path and differ only in the requested review state.
+- A new empty Trip Document leads with **Add first stop** and concise optional next steps. An empty focused day leads with **Add stop**, keeps **Ask agent for options** explicit, and surfaces relevant Unscheduled entries. Opening either state performs no inference.
+- Each Trip Stop is an elevated compact card. Activating the card opens a modal details surface; nested links, the drag handle, and the contextual menu remain independently operable.
+- Confirmed is the quiet default and does not use a persistent status pill. Draft remains explicit text and uses a dashed neutral border plus a quieter surface while retaining full text and control contrast. Every state remains understandable without color.
+- Draft review actions live with Draft details: Keep stop, Edit Draft, and Remove Draft. Document-level bulk review remains available as a secondary action when multiple Drafts are visible.
+- Drag is the primary pointer reorder interaction. Keyboard movement and contextual Place Before/After or Move to day/Unscheduled actions remain available; persistent up/down button pairs are not part of the default card.
+- Undo, Redo, full history, lifecycle actions, and exports use progressive disclosure. The planner foregrounds the itinerary and current add/review actions.
+- Share is one visible action. Before publication it opens the sanitized preview and **Create and copy link**; after publication it copies the current link directly, while update and revoke remain secondary management actions.
 
 ### WebMCP interface
 
@@ -218,12 +232,15 @@ TripAdvisory {
 - Test navigation and + New behavior through accessible browser outcomes, including keyboard menu operation and the absence of inference on navigation.
 - Test Trip lifecycle, Library isolation, current selection, archive/history retention, and deletion boundaries. Index browser coverage includes Active/Archived filtering, data-derived counts, whole-row pointer and keyboard activation, correct Trip Document routing, and absence of a redundant row action.
 - Test mutations for revision increments, stale rejection, idempotent retry, bounded operations, atomic rollback, Undo, Redo, and trusted actor derivation.
+- Test requested add state across trusted actors: human default Confirmed, human-requested Draft, agent-forced Draft, agent confirmation rejection, and exact Undo/Redo restoration of state and provenance.
 - Test references, missing Items, outside-content sanitization, and the guarantee that Trips does not create Items or Places automatically.
 - Test Overview, Day Planner, Schedule, and empty-day projections against one Trip Document.
+- Test whole-card details activation, nested-control isolation, modal focus behavior, Draft text and styling hooks, drag reordering, keyboard movement, and contextual placement against the same changeset operations.
 - Test recommendations for exactly three rich options, temporary presentation, dismissal without mutation, and stale selection.
 - Test agent advisories for explicit invocation, saved-data-only input, invalid references, rejection of external-fact fields, stale revision labeling, dismissal, and no automatic review.
 - Test WebMCP schemas, bounds, visible-route registration, cleanup, re-registration, stable errors, and forbidden consequential tools. Include a live target-browser smoke test using the proven Reading WebMCP protocol.
 - Test Share Snapshot allowlisting, private-field exclusion, token hashing, non-enumeration, explicit update, and revocation.
+- Test the simplified Share action before and after publication, including preview-before-publish, create-and-copy, direct copy on later use, and inaccessible clipboard fallback messaging.
 - Test local export with zero network calls, stable calendar identities, escaping, and timezone boundaries.
 - Every ticket keeps relevant existing tests, typecheck, and production build green.
 

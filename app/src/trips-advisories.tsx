@@ -81,10 +81,16 @@ export function TripHistory({
   history,
   trip,
   onToggle,
+  redo,
+  canRedo,
+  busy,
 }: {
   history: { changesets: TripChangesetView[]; canUndo: boolean; canRedo: boolean; dismissedAdvisories: TripAdvisory[] } | null;
   trip: TripDocument;
   onToggle: (open: boolean) => void;
+  redo: () => void;
+  canRedo: boolean;
+  busy: boolean;
 }) {
   const dismissed = history?.dismissedAdvisories ?? [];
   return (
@@ -92,7 +98,12 @@ export function TripHistory({
       className="trip-history"
       onToggle={(event) => onToggle((event.target as HTMLDetailsElement).open)}
     >
-      <summary>History</summary>
+      <summary>Activity and recovery</summary>
+      <p className="trip-history-tools">
+        <button type="button" className="btn trip-redo" disabled={busy || !canRedo} onClick={redo}>
+          Redo
+        </button>
+      </p>
       {dismissed.length > 0 ? (
         <section className="trip-advisories" aria-label="Dismissed agent opinions">
           {dismissed.map((advisory) => (

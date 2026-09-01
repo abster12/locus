@@ -364,6 +364,55 @@ test("trips HTTP: changes, undo, redo, history, stale 409, invalid 400, actor fo
   }
 });
 
+test("trips HTTP: addStop state round-trips without trusting client actor", async () => {
+  const database = mem();
+  const app = await start(database);
+  try {
+    const created = ((await (await app.post("/api/trips", { destination: "Kyoto", durationDays: 2, clientMutationId: "create-state" })).json()) as { trip: TripDocument }).trip;
+    const day1 = created.days[0]!.id;
+    const draftOp = { type: "addStop", dayId: day1, content: { kind: "outside", title: "Maybe later" }, state: "draft" };
+
+    const humanDraft = await app.post(`/api/trips/${created.id}/changes`, {
+      expectedRevision: 1,
+      clientMutationId: "d1",
+      operations: [draftOp],
+      actor: "agent",
+    });
+    assert.equal(humanDraft.status, 200);
+    const humanBody = (await humanDraft.json()) as { trip: TripDocument; changeset: { actor: string } };
+    const draftStop = humanBody.trip.days[0]!.stops[0]!;
+    assert.equal(humanBody.changeset.actor, "user");
+    assert.equal(draftStop.state, "draft");
+    assert.deepEqual(draftStop.provenance, { actor: "user", via: "manual" });
+
+    const agentForced = await app.post(`/api/trips/${created.id}/agent/changes`, {
+      expectedRevision: 2,
+      clientMutationId: "a1",
+      operations: [{ type: "addStop", dayId: day1, content: { kind: "outside", title: "Agent cafe" }, state: "confirmed" }],
+      actor: "user",
+    });
+    assert.equal(agentForced.status, 200);
+    const agentBody = (await agentForced.json()) as { trip: TripDocument; changeset: { actor: string } };
+    const agentStop = agentBody.trip.days[0]!.stops[1]!;
+    assert.equal(agentBody.changeset.actor, "agent");
+    assert.equal(agentStop.state, "draft", "agent route stays Draft even when Confirmed is requested");
+    assert.deepEqual(agentStop.provenance, { actor: "agent", via: "agent" });
+
+    const invalid = await app.post(`/api/trips/${created.id}/changes`, {
+      expectedRevision: 3,
+      clientMutationId: "bad",
+      operations: [{ type: "addStop", dayId: day1, content: { kind: "outside", title: "Ghost" }, state: "published" }],
+    });
+    assert.equal(invalid.status, 400);
+    const after = ((await (await app.get(`/api/trips/${created.id}`)).json()) as { trip: TripDocument }).trip;
+    assert.equal(after.revision, 3, "invalid add state leaves the revision alone");
+    assert.equal(after.days[0]!.stops.length, 2);
+  } finally {
+    await app.close();
+    database.close();
+  }
+});
+
 test("trips HTTP: source search is bounded and outside stops create no Library rows", async () => {
   const database = mem();
   database

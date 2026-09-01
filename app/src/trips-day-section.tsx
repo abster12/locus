@@ -1,16 +1,7 @@
 import type { TripChangeOp, TripDay, TripDocument, TripStop } from "./api.ts";
-import { formatDate, weekdayDay } from "./trips-format.ts";
+import { dayStamp, weekdayDay } from "./trips-format.ts";
 import { StopRow } from "./trips-stop-row.tsx";
-import { AddStopForm, HoleForm } from "./trips-stop-forms.tsx";
-import { LibrarySearchForm } from "./trips-library-picker.tsx";
-import type { FillPlacement } from "./trips-stop-ops.ts";
-
-/** Which add sheet is open in the planner: a day, Unscheduled, or a fill. */
-export type OpenAdd = {
-  dayId: string | null;
-  mode: "library" | "placeholder" | "hole";
-  fill?: FillPlacement;
-} | null;
+import type { OpenAdd } from "./trips-stop-ops.ts";
 
 type SectionProps = {
   trip: TripDocument;
@@ -21,75 +12,37 @@ type SectionProps = {
   editingStopId: string | null;
   setEditingStopId: (stopId: string | null) => void;
   fillHole: (hole: TripStop, list: TripStop[], index: number) => void;
-  fillRequest: string;
+  announce: (message: string) => void;
 };
 
-/** The hole/fill/library/placeholder slots shared by every day section and
- * Unscheduled. Only one sheet is open at a time, so the dayId guard decides
- * whether any slot renders. */
-function AddSlots({
+function AddStopButton({
   dayId,
-  label,
-  openAdd,
-  setOpenAdd,
   busy,
-  apply,
-  fillRequest,
+  open,
+  setOpenAdd,
+  primary = false,
 }: {
   dayId: string | null;
-  label: string;
-  openAdd: OpenAdd;
-  setOpenAdd: (next: OpenAdd) => void;
   busy: boolean;
-  apply: (operations: TripChangeOp[], note: string) => void;
-  fillRequest: string;
+  open: boolean;
+  setOpenAdd: (next: OpenAdd) => void;
+  primary?: boolean;
 }) {
-  if (!openAdd || openAdd.dayId !== dayId) return null;
-  const add = (operations: TripChangeOp[], note: string) => {
-    setOpenAdd(null);
-    apply(operations, note);
-  };
   return (
-    <>
-      {openAdd.mode === "hole" ? (
-        <HoleForm
-          dayId={dayId}
-          busy={busy}
-          onCancel={() => setOpenAdd(null)}
-          onAdd={(operations) => add(operations, `Hole added to ${label}.`)}
-        />
-      ) : null}
-      {openAdd.fill ? (
-        <div className="trip-fill">
-          <p className="trip-fill-label">Fill “{fillRequest}” — the hole closes and what you add takes its exact place.</p>
-          <LibrarySearchForm
-            dayId={dayId}
-            fill={openAdd.fill}
-            busy={busy}
-            onCancel={() => setOpenAdd(null)}
-            onAdd={(operations) => add(operations, "Hole filled.")}
-          />
-          <AddStopForm
-            dayId={dayId}
-            fill={openAdd.fill}
-            busy={busy}
-            onCancel={() => setOpenAdd(null)}
-            onAdd={(operations) => add(operations, "Hole filled.")}
-          />
-        </div>
-      ) : null}
-      {!openAdd.fill && openAdd.mode === "library" ? (
-        <LibrarySearchForm dayId={dayId} busy={busy} onCancel={() => setOpenAdd(null)} onAdd={(operations) => add(operations, `Stop added to ${label}.`)} />
-      ) : null}
-      {!openAdd.fill && openAdd.mode === "placeholder" ? (
-        <AddStopForm dayId={dayId} busy={busy} onCancel={() => setOpenAdd(null)} onAdd={(operations) => add(operations, `Stop added to ${label}.`)} />
-      ) : null}
-    </>
+    <button
+      type="button"
+      className={`btn${primary ? " primary" : ""} trip-add-btn`}
+      disabled={busy}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      onClick={() => setOpenAdd({ dayId, source: null })}
+    >
+      Add stop
+    </button>
   );
 }
 
-/** One Trip Day: header (theme edit, add buttons), add sheets, then the
- * empty-day card or the stop list. */
+/** One Trip Day: header (theme edit, add), then the empty-day card or the stop list. */
 export function DaySection({
   day,
   emptyOpen,
@@ -102,65 +55,46 @@ export function DaySection({
   editingStopId,
   setEditingStopId,
   fillHole,
-  fillRequest,
+  announce,
 }: SectionProps & {
   day: TripDay;
   emptyOpen: boolean;
   askForOpinions: () => void;
 }) {
+  const addOpen = openAdd?.dayId === day.id && !openAdd.fill;
+  const drafts = day.stops.filter((stop) => stop.state === "draft").length;
   return (
     <section className={`trip-day${emptyOpen ? " trip-day-open" : ""}`} aria-label={day.label}>
       <header className="trip-day-head">
-        <span className="trip-day-label">{day.label}</span>
-        {day.theme ? <span className="trip-day-theme">{day.theme}</span> : null}
-        <label className="trip-day-theme-edit">
-          <span className="visually-hidden">Theme for {day.label}</span>
-          <input
-            defaultValue={day.theme ?? ""}
-            placeholder="Theme"
-            maxLength={120}
-            disabled={busy}
-            onBlur={(event) => {
-              const theme = event.target.value.trim() || null;
-              if (theme === (day.theme ?? null)) return;
-              apply([{ type: "updateDay", dayId: day.id, theme }], theme ? `Theme set to ${theme}.` : "Theme cleared.");
-            }}
-          />
-        </label>
-        <span className="trip-day-date">{day.date ? formatDate(day.date) : "open date"}</span>
+        <div className="trip-day-identity">
+          <span className="trip-day-kicker">{day.date ? dayStamp(day.date) : "Open date"}</span>
+          <h2 className="trip-planner-title">{day.label}</h2>
+          <label className="trip-day-theme-edit">
+            <span className="visually-hidden">Theme for {day.label}</span>
+            <input
+              key={day.theme ?? ""}
+              defaultValue={day.theme ?? ""}
+              placeholder="Add a day theme"
+              maxLength={120}
+              disabled={busy}
+              onBlur={(event) => {
+                const theme = event.target.value.trim() || null;
+                if (theme === (day.theme ?? null)) return;
+                apply([{ type: "updateDay", dayId: day.id, theme }], theme ? `Theme set to ${theme}.` : "Theme cleared.");
+              }}
+            />
+          </label>
+        </div>
         {emptyOpen ? null : (
-          <>
-            <button
-              type="button"
-              className="btn trip-add-btn"
-              disabled={busy}
-              aria-expanded={openAdd?.dayId === day.id && openAdd.mode === "library" && !openAdd.fill}
-              onClick={() => setOpenAdd(openAdd?.dayId === day.id && openAdd.mode === "library" && !openAdd.fill ? null : { dayId: day.id, mode: "library" })}
-            >
-              Add from Library
-            </button>
-            <button
-              type="button"
-              className="btn trip-add-btn"
-              disabled={busy}
-              aria-expanded={openAdd?.dayId === day.id && openAdd.mode === "placeholder" && !openAdd.fill}
-              onClick={() => setOpenAdd(openAdd?.dayId === day.id && openAdd.mode === "placeholder" && !openAdd.fill ? null : { dayId: day.id, mode: "placeholder" })}
-            >
-              Add a placeholder
-            </button>
-          </>
+          <div className="trip-day-tools">
+            <span className="trip-stop-count">
+              {day.stops.length} {day.stops.length === 1 ? "stop" : "stops"}
+              {drafts ? ` · ${drafts} Draft${drafts === 1 ? "" : "s"}` : ""}
+            </span>
+            <AddStopButton dayId={day.id} busy={busy} open={addOpen} setOpenAdd={setOpenAdd} primary />
+          </div>
         )}
-        <button
-          type="button"
-          className="btn trip-add-btn"
-          disabled={busy}
-          aria-expanded={openAdd?.dayId === day.id && openAdd.mode === "hole"}
-          onClick={() => setOpenAdd(openAdd?.dayId === day.id && openAdd.mode === "hole" ? null : { dayId: day.id, mode: "hole" })}
-        >
-          Add a hole
-        </button>
       </header>
-      <AddSlots dayId={day.id} label={day.label} openAdd={openAdd} setOpenAdd={setOpenAdd} busy={busy} apply={apply} fillRequest={fillRequest} />
       {day.stops.length === 0 ? (
         emptyOpen ? (
           <div className="trip-empty-card">
@@ -170,29 +104,12 @@ export function DaySection({
             <span className="trip-empty-stamp">
               {day.label} · {day.date ? weekdayDay(day.date) : "open date"}
             </span>
-            <h3>Leave it open, or give it a shape.</h3>
-            <p>Nothing is planned for {day.label}. Opening this day does not invoke an agent or turn loose ideas into stops.</p>
+            <h3>Nothing planned—and that is okay.</h3>
+            <p>Keep the day open, add a stop yourself, or ask your agent to present three options. Opening this day never starts inference.</p>
             <div className="trip-empty-actions">
-              <button
-                type="button"
-                className="btn primary trip-add-btn"
-                disabled={busy}
-                aria-expanded={openAdd?.dayId === day.id && openAdd.mode === "library"}
-                onClick={() => setOpenAdd(openAdd?.dayId === day.id && openAdd.mode === "library" ? null : { dayId: day.id, mode: "library" })}
-              >
-                Add from Library
-              </button>
-              <button
-                type="button"
-                className="btn trip-add-btn"
-                disabled={busy}
-                aria-expanded={openAdd?.dayId === day.id && openAdd.mode === "placeholder"}
-                onClick={() => setOpenAdd(openAdd?.dayId === day.id && openAdd.mode === "placeholder" ? null : { dayId: day.id, mode: "placeholder" })}
-              >
-                Add a placeholder
-              </button>
+              <AddStopButton dayId={day.id} busy={busy} open={addOpen} setOpenAdd={setOpenAdd} primary />
               <button type="button" className="btn" disabled={busy} onClick={askForOpinions}>
-                Ask for three opinions
+                Ask agent for options
               </button>
             </div>
           </div>
@@ -214,6 +131,7 @@ export function DaySection({
               onCloseEdit={() => setEditingStopId(null)}
               onFill={() => fillHole(stop, day.stops, index)}
               apply={apply}
+              announce={announce}
             />
           ))}
         </ol>
@@ -222,8 +140,7 @@ export function DaySection({
   );
 }
 
-/** The Unscheduled holding area: same header/add-sheet/empty-or-list shape as
- * a day, pinned to dayId null. */
+/** The Unscheduled holding area: same header/empty-or-list shape as a day, pinned to dayId null. */
 export function UnscheduledSection({
   trip,
   busy,
@@ -233,62 +150,40 @@ export function UnscheduledSection({
   editingStopId,
   setEditingStopId,
   fillHole,
-  fillRequest,
+  announce,
 }: SectionProps) {
+  const waiting = trip.unscheduled.length;
   return (
-    <section className="trip-day trip-unscheduled" aria-label="Unscheduled">
-      <header className="trip-day-head">
-        <h3 className="trip-unscheduled-label">Unscheduled</h3>
-        <button
-          type="button"
-          className="btn trip-add-btn"
-          disabled={busy}
-          aria-expanded={openAdd?.dayId === null && openAdd.mode === "library" && !openAdd.fill}
-          onClick={() => setOpenAdd(openAdd?.dayId === null && openAdd.mode === "library" && !openAdd.fill ? null : { dayId: null, mode: "library" })}
-        >
-          Add from Library
-        </button>
-        <button
-          type="button"
-          className="btn trip-add-btn"
-          disabled={busy}
-          aria-expanded={openAdd?.dayId === null && openAdd.mode === "placeholder" && !openAdd.fill}
-          onClick={() => setOpenAdd(openAdd?.dayId === null && openAdd.mode === "placeholder" && !openAdd.fill ? null : { dayId: null, mode: "placeholder" })}
-        >
-          Add a placeholder
-        </button>
-        <button
-          type="button"
-          className="btn trip-add-btn"
-          disabled={busy}
-          aria-expanded={openAdd?.dayId === null && openAdd.mode === "hole"}
-          onClick={() => setOpenAdd(openAdd?.dayId === null && openAdd.mode === "hole" ? null : { dayId: null, mode: "hole" })}
-        >
-          Add a hole
-        </button>
-      </header>
-      <AddSlots dayId={null} label="Unscheduled" openAdd={openAdd} setOpenAdd={setOpenAdd} busy={busy} apply={apply} fillRequest={fillRequest} />
-      {trip.unscheduled.length === 0 ? (
-        <p className="trip-stop-empty">Nothing waiting.</p>
-      ) : (
-        <ol className="trip-stop-list">
-          {trip.unscheduled.map((stop, index) => (
-            <StopRow
-              key={stop.id}
-              stop={stop}
-              trip={trip}
-              list={trip.unscheduled}
-              index={index}
-              busy={busy}
-              editing={editingStopId === stop.id}
-              onEdit={() => setEditingStopId(stop.id)}
-              onCloseEdit={() => setEditingStopId(null)}
-              onFill={() => fillHole(stop, trip.unscheduled, index)}
-              apply={apply}
-            />
-          ))}
-        </ol>
-      )}
-    </section>
+    <details className="trip-unscheduled" aria-label="Unscheduled">
+      <summary>
+        Unscheduled
+        <span>{waiting === 0 ? "Nothing waiting" : `${waiting} ${waiting === 1 ? "item" : "items"}`}</span>
+      </summary>
+      <div className="trip-unscheduled-body">
+        <AddStopButton dayId={null} busy={busy} open={openAdd?.dayId === null && !openAdd.fill} setOpenAdd={setOpenAdd} primary />
+        {waiting === 0 ? (
+          <p className="trip-stop-empty">Nothing waiting.</p>
+        ) : (
+          <ol className="trip-stop-list">
+            {trip.unscheduled.map((stop, index) => (
+              <StopRow
+                key={stop.id}
+                stop={stop}
+                trip={trip}
+                list={trip.unscheduled}
+                index={index}
+                busy={busy}
+                editing={editingStopId === stop.id}
+                onEdit={() => setEditingStopId(stop.id)}
+                onCloseEdit={() => setEditingStopId(null)}
+                onFill={() => fillHole(stop, trip.unscheduled, index)}
+                apply={apply}
+                announce={announce}
+              />
+            ))}
+          </ol>
+        )}
+      </div>
+    </details>
   );
 }

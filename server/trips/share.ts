@@ -143,8 +143,7 @@ export function previewShareSnapshot(
 
 export type ShareState = { revision: number; updatedAt: string };
 
-/** Owner-facing state. Never carries the token — only its hash is stored, so
- * the link cannot be re-shown later, only re-minted by publishing again. */
+/** Owner-facing state. Never carries the token — only its hash is stored. */
 export function getShareState(db: Db, libraryId: string, tripId: string): ShareState | null {
   const row = db.prepare(`SELECT * FROM trip_share_snapshots WHERE trip_id = ?`).get(tripId) as ShareRow | undefined;
   if (!row || row.revoked_at) return null;
@@ -157,8 +156,7 @@ export type SharePublishResult = { token: string; snapshot: ShareSnapshot; revis
 
 /** Replay of a publish whose response may have been lost: the original
  * snapshot without re-minting or re-showing the token. Only the token hash is
- * ever stored, so a replay cannot hand the capability back — publish again
- * with a fresh mutation id to mint a new link. */
+ * stored, so a replay cannot hand the capability back. */
 export type SharePublishReplay = Omit<SharePublishResult, "token"> & { token: null };
 
 /** Human-only publish (and re-publish), revision-checked through the standard

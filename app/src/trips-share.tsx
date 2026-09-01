@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   exportFileName,
   exportTripHtml,
@@ -198,41 +198,80 @@ export function ExportControl({ trip }: { trip: TripDocument }) {
   );
 }
 
-/** Human-only share seam: preview → publish/cancel → copy link → revoke.
- * The link exists only in the publish response (the database stores a hash),
- * so it is kept for this tab in sessionStorage and re-minted on republish. */
-export function ShareControl({ trip }: { trip: TripDocument }) {
+function shareUrl(token: string): string {
+  return `${location.origin}/s/${token}`;
+}
+
+function shareLinkKey(tripId: string): string {
+  return `locus-trip-share-${tripId}`;
+}
+
+function readStoredShareLink(tripId: string): string | null {
+  try {
+    return localStorage.getItem(shareLinkKey(tripId));
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredShareLink(tripId: string, url: string): void {
+  try {
+    localStorage.setItem(shareLinkKey(tripId), url);
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearStoredShareLink(tripId: string): void {
+  try {
+    localStorage.removeItem(shareLinkKey(tripId));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Human-only share: first Share previews; later Share copies this browser's
+ * stored capability URL (localStorage, so tabs and sessions keep it). The raw
+ * token exists only in the publish response; the database stores a hash. */
+export function useTripShare(trip: TripDocument | null) {
   const [shared, setShared] = useState<TripShareState | null>(null);
   const [panel, setPanel] = useState<{ snapshot: TripShareSnapshot; digest: string } | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const linkKey = `locus-trip-share-${trip.id}`;
+  const [notice, setNotice] = useState("");
+  const [fallback, setFallback] = useState<string | null>(null);
+  const tripId = trip?.id ?? "";
+  const revision = trip?.revision ?? 0;
 
   useEffect(() => {
+    if (!tripId) return;
     let alive = true;
     setPanel(null);
-    setLink(null);
+    setNotice("");
+    setFallback(null);
+    setErr(null);
+    const stored = readStoredShareLink(tripId);
+    setLink(stored);
     setShared(null);
-    try {
-      const stored = sessionStorage.getItem(linkKey);
-      if (stored) setLink(stored);
-    } catch {
-      /* sessionStorage unavailable: the link is simply not re-shown */
-    }
     api
-      .shareState(trip.id)
+      .shareState(tripId)
       .then((result) => {
-        if (alive) setShared(result.shared);
+        if (!alive) return;
+        setShared(result.shared);
+        if (!result.shared) {
+          clearStoredShareLink(tripId);
+          setLink(null);
+        }
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [trip.id, trip.revision]);
+  }, [tripId, revision]);
 
   async function act(action: () => Promise<void>) {
-    if (busy) return;
+    if (busy || !trip) return;
     setBusy(true);
     setErr(null);
     try {
@@ -244,78 +283,166 @@ export function ShareControl({ trip }: { trip: TripDocument }) {
     }
   }
 
+  async function copyLink(url: string, copied: string) {
+    const ok = await copyPlain(url);
+    setFallback(url);
+    setNotice(ok ? copied : "Copying is blocked by the browser. Select the link and copy it.");
+  }
+
   const preview = () =>
     act(async () => {
+      if (!trip) return;
       const result = await api.sharePreview(trip.id);
       setShared(result.shared);
       setPanel({ snapshot: result.snapshot, digest: result.digest });
     });
 
-  const publish = () =>
+  const primary = () => {
+    if (busy) return;
+    if (shared) {
+      if (link) void copyLink(link, "Share link copied.");
+      else setNotice("The share link is only available in this browser. Update the snapshot to create a new link.");
+      return;
+    }
+    void preview();
+  };
+
+  const confirmPublish = () =>
     act(async () => {
-      if (!panel) return;
+      if (!trip || !panel) return;
+      const updating = Boolean(shared);
       const result = await api.sharePublish(trip.id, trip.revision, panel.digest);
-      const url = `${location.origin}/s/${result.token}`;
-      try {
-        sessionStorage.setItem(linkKey, url);
-      } catch {
-        /* ignore */
-      }
       setShared({ revision: result.revision, updatedAt: result.updatedAt });
+      if (!result.token) {
+        setPanel(null);
+        setNotice(updating ? "Shared version updated." : "Share link created.");
+        return;
+      }
+      const url = shareUrl(result.token);
+      writeStoredShareLink(trip.id, url);
       setLink(url);
+      await copyLink(url, updating ? "Shared version updated and copied." : "Read-only link created and copied.");
       setPanel(null);
     });
 
   const revoke = () =>
     act(async () => {
+      if (!trip) return;
       if (!window.confirm("Revoke this shared link? It will stop working immediately.")) return;
       await api.shareRevoke(trip.id, trip.revision);
-      try {
-        sessionStorage.removeItem(linkKey);
-      } catch {
-        /* ignore */
-      }
+      clearStoredShareLink(trip.id);
       setShared(null);
       setLink(null);
+      setFallback(null);
+      setNotice("Share link revoked.");
     });
 
+  return {
+    shared,
+    panel,
+    busy,
+    err,
+    notice,
+    fallback,
+    primary,
+    preview,
+    confirmPublish,
+    cancel: () => setPanel(null),
+    revoke,
+  };
+}
+
+export function ShareButton({ share }: { share: ReturnType<typeof useTripShare> }) {
   return (
     <span className="trip-share">
-      {shared ? (
-        <span className="chip trip-share-on">Shared · rev {shared.revision}</span>
-      ) : null}
-      {panel ? (
-        <span className="trip-share-panel">
-          <ShareSnapshotPreview snapshot={panel.snapshot} />
-          <span className="trip-share-actions">
-            <button type="button" className="btn primary" disabled={busy} onClick={publish}>
-              {shared ? "Update shared version" : "Publish"}
-            </button>
-            <button type="button" className="btn" disabled={busy} onClick={() => setPanel(null)}>
-              Cancel
-            </button>
-          </span>
-        </span>
-      ) : (
-        <button type="button" className="btn" disabled={busy} onClick={preview}>
-          {shared ? "Update shared version" : "Share"}
-        </button>
-      )}
-      {link ? (
-        <a className="trip-share-link" href={link}>
-          Open share link
-        </a>
-      ) : null}
-      {shared ? (
-        <button type="button" className="btn danger" disabled={busy} onClick={revoke}>
-          Revoke
-        </button>
-      ) : null}
-      {err ? (
-        <span className="bad" role="alert">
-          {err}
-        </span>
-      ) : null}
+      {share.shared ? <span className="chip trip-share-on">Shared · rev {share.shared.revision}</span> : null}
+      <button
+        type="button"
+        className="btn trip-share-btn"
+        aria-haspopup="dialog"
+        aria-expanded={Boolean(share.panel)}
+        onClick={share.primary}
+      >
+        Share
+      </button>
     </span>
+  );
+}
+
+export function SharePreviewPanel({ share }: { share: ReturnType<typeof useTripShare> }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const panel = share.panel;
+
+  useLayoutEffect(() => {
+    const el = dialog.current;
+    if (!el) return;
+    const trigger = document.querySelector(".trip-share-btn");
+    const previouslyFocused = trigger instanceof HTMLElement ? trigger : document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!el.open) el.showModal();
+    titleRef.current?.focus();
+    return () => {
+      if (el.open) el.close();
+      previouslyFocused?.focus();
+    };
+  }, []);
+
+  if (!panel) return null;
+  const title = share.shared ? "Update the shared itinerary" : "Create a read-only link";
+  return (
+    <dialog
+      ref={dialog}
+      className="trip-add-dialog trip-share-panel"
+      aria-labelledby="trip-share-title"
+      aria-describedby="trip-share-copy"
+      aria-busy={share.busy || undefined}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!share.busy) share.cancel();
+      }}
+    >
+      <div className="trip-add-head">
+        <h2 id="trip-share-title" ref={titleRef} tabIndex={-1}>
+          {title}
+        </h2>
+      </div>
+      <p id="trip-share-copy" className="trip-place-hint">
+        This is the exact snapshot a public link will show. Cancel keeps it private.
+      </p>
+      <ShareSnapshotPreview snapshot={panel.snapshot} />
+      <span className="trip-share-actions">
+        <button type="button" className="btn primary" disabled={share.busy} onClick={share.confirmPublish}>
+          {share.shared ? "Update shared version" : "Create and copy link"}
+        </button>
+        <button type="button" className="btn" disabled={share.busy} onClick={share.cancel}>
+          Cancel
+        </button>
+      </span>
+    </dialog>
+  );
+}
+
+export function ShareStatus({ share }: { share: ReturnType<typeof useTripShare> }) {
+  return (
+    <>
+      {share.fallback ? (
+        <p className="trip-share-fallback">
+          <label>
+            Share link
+            <input className="trip-share-link" readOnly value={share.fallback} onFocus={(event) => event.currentTarget.select()} />
+          </label>
+        </p>
+      ) : null}
+      {share.notice ? (
+        <p className="trip-share-notice" role="status">
+          {share.notice}
+        </p>
+      ) : null}
+      {share.err ? (
+        <p className="bad" role="alert">
+          {share.err}
+        </p>
+      ) : null}
+    </>
   );
 }

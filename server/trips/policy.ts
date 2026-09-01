@@ -167,6 +167,7 @@ export type TripStopOp =
       durationMinutes?: number | null;
       publicNotes?: string | null;
       privateNotes?: string | null;
+      state?: "confirmed" | "draft";
     }
   | {
       type: "updateStop";
@@ -252,6 +253,12 @@ function parsePlacement(raw: Record<string, unknown>): void {
   }
 }
 
+function optionalStopState(value: unknown, field: string): "confirmed" | "draft" | undefined {
+  if (value === undefined) return undefined;
+  if (value !== "confirmed" && value !== "draft") throw new RejectedPayload(`${field} must be "confirmed" or "draft"`);
+  return value;
+}
+
 /** Structural validation only: ids are checked against the document by the
  * module engine, which also owns the internal inverse operations. */
 export function parseTripOperations(value: unknown): TripStopOp[] {
@@ -274,12 +281,10 @@ export function parseTripOperations(value: unknown): TripStopOp[] {
           durationMinutes: raw.durationMinutes === undefined ? undefined : validateDurationMinutes(raw.durationMinutes, "durationMinutes"),
           publicNotes: optionalNotes(raw.publicNotes, "publicNotes"),
           privateNotes: optionalNotes(raw.privateNotes, "privateNotes"),
+          state: optionalStopState(raw.state, "addStop.state"),
         };
       }
       case "updateStop": {
-        if (raw.state !== undefined && raw.state !== "confirmed" && raw.state !== "draft") {
-          throw new RejectedPayload('updateStop.state must be "confirmed" or "draft"');
-        }
         const op: TripStopOp = {
           type: "updateStop",
           stopId: boundedId(raw.stopId, "stopId"),
@@ -291,7 +296,7 @@ export function parseTripOperations(value: unknown): TripStopOp[] {
           reservation: raw.reservation === undefined ? undefined : boundedText(raw.reservation, "reservation"),
           storedFacts: raw.storedFacts === undefined ? undefined : boundedList(raw.storedFacts, "storedFacts"),
           alternatives: raw.alternatives === undefined ? undefined : boundedList(raw.alternatives, "alternatives"),
-          state: raw.state as "confirmed" | "draft" | undefined,
+          state: optionalStopState(raw.state, "updateStop.state"),
         };
         const changesSomething =
           op.content !== undefined ||

@@ -44,37 +44,64 @@ test("trips browser: share preview, publish, public page, update, and confirmed 
     seedStop("stop-share-1", tripId, days[0]!.id, 0, "Fushimi Inari");
 
     await page.reload({ waitUntil: "networkidle0" });
-    await page.waitForSelector(".trip-detail-actions", { timeout: 5000 });
+    await page.waitForSelector(".trip-share-btn", { timeout: 5000 });
+    try {
+      await page.browserContext().overridePermissions(base, ["clipboard-read", "clipboard-write"]);
+    } catch {
+      /* older Chrome: the copy falls back to execCommand */
+    }
 
-    // Preview shows the exact snapshot and no private note; cancel writes nothing.
-    await page.$$eval(".trip-detail-actions .btn", (els) => {
-      const share = els.find((el) => el.textContent === "Share");
-      if (!share) throw new Error("no share button");
-      (share as HTMLElement).click();
-    });
-    await page.waitForSelector(".trip-share-panel", { timeout: 5000 });
+    assert.equal(await page.$(".trip-detail > .trip-export"), null, "export is not in the primary flow");
+    assert.ok(await page.$(".trip-doc-menu-list .trip-export"), "export stays in the document menu");
+    assert.equal(await page.$(".trip-planner-tools"), null);
+
+    const clickShare = () => page.click(".trip-share-btn");
+    const publishedUrl = (): Promise<string | null> =>
+      page.evaluate(async () => {
+        const fallback = (document.querySelector(".trip-share-link") as HTMLInputElement | null)?.value ?? "";
+        if (fallback) return fallback;
+        const clip = await navigator.clipboard.readText().catch(() => "");
+        return clip || null;
+      });
+
+    // Preview is a labelled dialog; cancel restores focus to Share and writes nothing.
+    await clickShare();
+    await page.waitForSelector("dialog.trip-share-panel[open]", { timeout: 5000 });
+    assert.equal(await page.$eval("dialog.trip-share-panel", (el) => el.getAttribute("aria-labelledby")), "trip-share-title");
+    assert.equal(
+      await page.evaluate(() => {
+        const root = document.querySelector("dialog.trip-share-panel");
+        return Boolean(root && document.activeElement && root.contains(document.activeElement));
+      }),
+      true,
+      "focus moves into the share preview",
+    );
     assert.match(await page.$eval(".trip-share-panel", (el) => el.textContent ?? ""), /Fushimi Inari/);
     assert.doesNotMatch(await page.$eval(".trip-share-panel", (el) => el.textContent ?? ""), /PRIVATE Fushimi/);
+    assert.match(await page.$eval(".trip-share-actions .btn.primary", (el) => el.textContent ?? ""), /Create and copy link/);
     await page.$$eval(".trip-share-actions .btn", (els) => {
       const cancel = els.find((el) => el.textContent === "Cancel");
       if (!cancel) throw new Error("no cancel");
       (cancel as HTMLElement).click();
     });
     await page.waitForFunction(() => !document.querySelector(".trip-share-panel"), { timeout: 5000 });
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.classList.contains("trip-share-btn") === true),
+      true,
+      "closing the preview restores focus to Share",
+    );
     const writesBeforePublish = writes.length;
 
-    // Publish mints a visible capability link.
-    await page.$$eval(".trip-detail-actions .btn", (els) => {
-      const share = els.find((el) => el.textContent === "Share");
-      if (!share) throw new Error("no share button");
-      (share as HTMLElement).click();
-    });
+    // Create and copy link mints a capability URL after explicit confirmation.
+    await clickShare();
     await page.waitForSelector(".trip-share-panel", { timeout: 5000 });
     await page.$eval(".trip-share-actions .btn.primary", (el) => (el as HTMLElement).click());
-    await page.waitForSelector(".trip-share-link", { timeout: 5000 });
-    const link = await page.$eval(".trip-share-link", (el) => (el as HTMLAnchorElement).href);
+    await page.waitForFunction(() => document.querySelector(".trip-share-notice")?.textContent?.includes("copied") === true, { timeout: 5000 });
+    const link = await publishedUrl();
+    if (!link) throw new Error("create-and-copy yields a share URL");
     assert.match(link, /\/s\/[A-Za-z0-9_-]{43,}$/);
     assert.match(await page.$eval(".trip-share-on", (el) => el.textContent ?? ""), /Shared · rev/);
+    const revisionAfterPublish = await page.$eval(".pagehead .count", (el) => el.textContent);
 
     const pub = await fetch(link);
     assert.equal(pub.status, 200);
@@ -83,6 +110,52 @@ test("trips browser: share preview, publish, public page, update, and confirmed 
     assert.match(pubHtml, /Public note for Fushimi Inari/);
     assert.ok(!pubHtml.includes("PRIVATE Fushimi"), "private notes never reach the public page");
     assert.ok(!pubHtml.includes("<script"), "public page ships no scripts");
+
+    // Later Share copies the same link without republishing or bumping revision.
+    const writesAfterPublish = writes.length;
+    await clickShare();
+    await page.waitForFunction(() => document.querySelector(".trip-share-notice")?.textContent === "Share link copied.", { timeout: 5000 });
+    assert.equal(await publishedUrl(), link);
+    assert.equal(await page.$eval(".pagehead .count", (el) => el.textContent), revisionAfterPublish);
+    assert.equal(await page.$(".trip-share-panel"), null);
+    assert.equal(writes.length, writesAfterPublish, "later Share must not publish again");
+
+    // Reload (new session) still copies the stored link without republishing.
+    await page.reload({ waitUntil: "networkidle0" });
+    await page.waitForSelector(".trip-share-on", { timeout: 5000 });
+    await clickShare();
+    await page.waitForFunction(() => document.querySelector(".trip-share-notice")?.textContent === "Share link copied.", { timeout: 5000 });
+    assert.equal(await publishedUrl(), link);
+    assert.equal(writes.length, writesAfterPublish, "reload Share must not publish again");
+
+    // A new tab recovers the same published link from localStorage, not the API.
+    assert.equal(await page.evaluate((id) => sessionStorage.getItem(`locus-trip-share-${id}`), tripId), null);
+    assert.equal(await page.evaluate((id) => localStorage.getItem(`locus-trip-share-${id}`), tripId), link);
+    const otherTab = await browser.newPage();
+    try {
+      try {
+        await otherTab.browserContext().overridePermissions(base, ["clipboard-read", "clipboard-write"]);
+      } catch {
+        /* older Chrome: the copy falls back to execCommand */
+      }
+      await otherTab.goto(`${base}/#/trips/${tripId}`, { waitUntil: "networkidle0" });
+      await otherTab.waitForSelector(".trip-share-on", { timeout: 5000 });
+      assert.equal(await otherTab.evaluate((id) => localStorage.getItem(`locus-trip-share-${id}`), tripId), link);
+      assert.equal(await otherTab.evaluate((id) => sessionStorage.getItem(`locus-trip-share-${id}`), tripId), null);
+      await otherTab.click(".trip-share-btn");
+      await otherTab.waitForFunction(() => document.querySelector(".trip-share-notice")?.textContent === "Share link copied.", { timeout: 5000 });
+      assert.equal(
+        await otherTab.evaluate(async () => {
+          const clip = await navigator.clipboard.readText().catch(() => "");
+          if (clip) return clip;
+          return (document.querySelector(".trip-share-link") as HTMLInputElement | null)?.value ?? null;
+        }),
+        link,
+      );
+      assert.equal(await otherTab.$(".trip-share-panel"), null);
+    } finally {
+      await otherTab.close();
+    }
 
     // The public page is not the app: no shell chrome, no WebMCP runtime.
     const publicPage = await browser.newPage();
@@ -101,21 +174,37 @@ test("trips browser: share preview, publish, public page, update, and confirmed 
     // mints a new token and the old one dies.
     seedStop("stop-share-2", tripId, days[1]!.id, 0, "Day 2 stop");
     assert.ok(!(await (await fetch(link)).text()).includes("Day 2 stop"));
-    await page.$$eval(".trip-detail-actions .btn", (els) => {
+    await page.$$eval(".trip-doc-menu-list .btn", (els) => {
       const update = els.find((el) => el.textContent === "Update shared version");
       if (!update) throw new Error("no update button");
       (update as HTMLElement).click();
     });
     await page.waitForSelector(".trip-share-panel", { timeout: 5000 });
     await page.$eval(".trip-share-actions .btn.primary", (el) => (el as HTMLElement).click());
-    await page.waitForFunction((old) => document.querySelector(".trip-share-link")?.getAttribute("href") !== old, { timeout: 5000 }, link);
-    const link2 = await page.$eval(".trip-share-link", (el) => (el as HTMLAnchorElement).href);
+    await page.waitForFunction(() => document.querySelector(".trip-share-notice")?.textContent?.includes("updated") === true, { timeout: 5000 });
+    const link2 = await publishedUrl();
+    if (!link2) throw new Error("update-and-copy yields a share URL");
     assert.notEqual(link2, link);
     assert.match(await (await fetch(link2)).text(), /Day 2 stop/);
     assert.equal((await fetch(link)).status, 404, "old token is dead after republish");
 
+    await page.evaluate(`(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: function () { return Promise.reject(new Error("denied")); },
+          readText: function () { return Promise.reject(new Error("denied")); },
+        },
+      });
+      document.execCommand = function () { return false; };
+    })()`);
+    await clickShare();
+    await page.waitForSelector(".trip-share-fallback .trip-share-link", { timeout: 5000 });
+    assert.equal(await page.$eval(".trip-share-fallback .trip-share-link", (el) => (el as HTMLInputElement).value), link2);
+    assert.match(await page.$eval(".trip-share-notice", (el) => el.textContent ?? ""), /Copying is blocked/);
+
     // Revoke requires the confirm dialog and kills the link.
-    await page.$$eval(".trip-detail-actions .btn", (els) => {
+    await page.$$eval(".trip-doc-menu-list .btn", (els) => {
       const revoke = els.find((el) => el.textContent === "Revoke");
       if (!revoke) throw new Error("no revoke button");
       (revoke as HTMLElement).click();
@@ -191,6 +280,9 @@ test("trips browser: export actions copy, print, and download without external r
 
     await page.setViewport({ width: 1100, height: 800 });
     await page.goto(`${base}/#/trips/${trip.id}`, { waitUntil: "networkidle0" });
+    await page.waitForSelector(".trip-doc-menu", { timeout: 5000 });
+    await page.click(".trip-doc-menu > summary");
+    await page.click(".trip-doc-export > summary");
     await page.waitForSelector(".trip-export", { timeout: 5000 });
     assert.match(await page.$eval(".trip-export-projection", (el) => el.textContent ?? ""), /Current private revision \d+/);
 

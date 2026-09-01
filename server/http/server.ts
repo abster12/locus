@@ -519,7 +519,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
   // fresh token and snapshots the document as it stands (update and
   // republish are the same call); revoke kills the capability. All three are
   // human-session routes — the raw token only ever exists in the publish
-  // response body, never in the database.
+  // response body, never in the database or owner GET /share.
   on("GET", "/api/trips/:id/share", async (_req, res, _url, _body, params) => {
     const trip = getTrip(db, LOCAL_LIBRARY_ID, params.id ?? "");
     if (!trip) return json(res, 404, { error: "trip not found" });

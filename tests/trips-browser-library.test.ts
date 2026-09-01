@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clickByText as harnessClickByText, launchBrowser, setInput as harnessSetInput, startServer, tempDb, trackTraffic } from "./trips-browser-harness.ts";
+import { chooseAddSource, clickByText as harnessClickByText, launchBrowser, setInput as harnessSetInput, startServer, tempDb, trackTraffic } from "./trips-browser-harness.ts";
 
 process.env.NODE_ENV = "production";
 process.env.LOCUS_NO_VITE = "1";
 process.env.LOCUS_READING_WORKER = "0";
-process.env.LOCUS_PORT = "8812";
+process.env.LOCUS_PORT = "8822";
 
 
 test("trips browser: add from Library, inspect details, and broken references stay visible", async () => {
@@ -45,43 +45,123 @@ test("trips browser: add from Library, inspect details, and broken references st
     await page.waitForFunction(() => /view=/.test(location.hash), { timeout: 5000 });
     await page.waitForSelector(".trip-planner", { timeout: 5000 });
 
-    // Add from Library: search finds both kinds; the item result places a reference stop.
-    await clickByText(".trip-day:not(.trip-unscheduled)", "Add from Library");
-    await page.waitForSelector(".trip-search input[type='search']", { timeout: 5000 });
-    await setInput(".trip-search input[type='search']", "nishiki");
+    // Add from Library: search finds both kinds; the item result plus Add stop places a reference.
+    await clickByText(".trip-day:not(.trip-unscheduled)", "Add stop");
+    await chooseAddSource(page, "Choose from Library");
+    await page.waitForSelector(".trip-add-dialog input[type='search']", { timeout: 5000 });
+    await setInput(".trip-add-dialog input[type='search']", "nishiki");
     await page.waitForSelector(".trip-search-result", { timeout: 5000 });
     const results = await page.$$eval(".trip-search-result", (els) => els.map((el) => el.textContent ?? ""));
     assert.equal(results.filter((text) => text.includes("Saved item")).length, 1);
     assert.equal(results.filter((text) => text.includes("Place · landmark")).length, 1);
 
-    await page.$eval(".trip-search", (root) => {
+    await page.$eval(".trip-add-dialog", (root) => {
       const button = [...root.querySelectorAll<HTMLButtonElement>(".trip-search-result")].find((el) => el.textContent?.includes("Nishiki snack walk"));
       if (!button) throw new Error("no item result");
       button.click();
     });
+    await page.click(".trip-add-dialog button[type='submit']");
     await page.waitForFunction(() => document.querySelector(".trip-day:not(.trip-unscheduled) .trip-stop-title")?.textContent === "Nishiki snack walk", { timeout: 5000 });
     const kinds = await page.$$eval(".trip-day:not(.trip-unscheduled) .trip-stop-kind", (els) => els.map((el) => el.textContent ?? ""));
     assert.deepEqual(kinds, ["Saved item"]);
 
-    // Progressive disclosure: source and original link live in the details.
-    await page.click('[aria-label="Details for Nishiki snack walk"]');
-    await page.waitForFunction(() => document.querySelector(".trip-stop-more[open]"), { timeout: 5000 });
-    const facts = await page.$eval(".trip-stop-more[open] .trip-stop-facts", (el) => el.textContent ?? "");
+    // The card itself opens details; nested source/menu/drag do not.
+    assert.equal(await page.$(".trip-stop-state"), null, "Confirmed has no persistent pill");
+    await page.focus('[aria-label="Open details for Nishiki snack walk"]');
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".trip-stop-dialog[open]", { timeout: 5000 });
+    const facts = await page.$eval(".trip-stop-dialog[open] .trip-stop-facts", (el) => el.textContent ?? "");
     assert.match(facts, /Source/);
     assert.match(facts, /x/);
     assert.match(facts, /Open original/);
+    const writesBeforeEscape = writes.length;
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".trip-stop-dialog"), { timeout: 5000 });
+    assert.equal(writes.length, writesBeforeEscape, "Escape closes details without mutation");
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Open details for Nishiki snack walk");
+    assert.equal(
+      await page.$eval(".trip-stop-source", (el) => {
+        el.addEventListener("click", (event) => event.preventDefault(), { once: true });
+        (el as HTMLElement).click();
+        return document.querySelector(".trip-stop-dialog[open]") ? true : false;
+      }),
+      false,
+      "source link does not open details",
+    );
+    await page.click('[aria-label="Drag Nishiki snack walk to reorder"]');
+    assert.equal(await page.$(".trip-stop-dialog[open]"), null, "drag handle does not open details");
+    await page.click('[aria-label="Actions for Nishiki snack walk"]');
+    assert.equal(await page.$(".trip-stop-dialog[open]"), null, "menu does not open details");
+    await page.click('[aria-label="Actions for Nishiki snack walk"]');
 
     // An outside stop with a user-supplied public link stays visibly distinct.
-    await clickByText(".trip-day:not(.trip-unscheduled)", "Add a placeholder");
-    await page.waitForSelector(".trip-add-form input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
-    await setInput(".trip-add-form input[placeholder='e.g. Nishiki Market']", "Ramen research");
-    await setInput(".trip-add-form input[type='url']", "https://example.com/ramen");
-    await page.click(".trip-add-form button[type='submit']");
+    await clickByText(".trip-day:not(.trip-unscheduled)", "Add stop");
+    await chooseAddSource(page, "Add outside content");
+    await page.waitForSelector(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
+    await setInput(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", "Ramen research");
+    await setInput(".trip-add-dialog input[type='url']", "https://example.com/ramen");
+    await page.click(".trip-add-dialog button[type='submit']");
     await page.waitForFunction(() => document.querySelectorAll(".trip-day:not(.trip-unscheduled) .trip-stop-title").length === 2, { timeout: 5000 });
-    await page.click('[aria-label="Details for Ramen research"]');
-    await page.waitForFunction(() => [...document.querySelectorAll(".trip-stop-more[open] .trip-stop-facts")].some((el) => el.textContent?.includes("Open link")), { timeout: 5000 });
+    await page.focus('[aria-label="Open details for Ramen research"]');
+    await page.keyboard.press(" ");
+    await page.waitForFunction(() => document.querySelector(".trip-stop-dialog[open] .trip-stop-facts")?.textContent?.includes("Open link"), { timeout: 5000 });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".trip-stop-dialog"), { timeout: 5000 });
     const outsideKinds = await page.$$eval(".trip-day:not(.trip-unscheduled) .trip-stop-kind", (els) => els.map((el) => el.textContent ?? ""));
     assert.ok(outsideKinds.includes("Outside"), "outside content is labelled as text");
+
+    const writesBeforeCancel = writes.length;
+    await page.$$eval(".trip-day:not(.trip-unscheduled) button", (els) => {
+      const button = els.find((el) => (el.textContent ?? "").trim() === "Add stop") as HTMLButtonElement | undefined;
+      if (!button) throw new Error("no Add stop button");
+      button.focus();
+      button.click();
+    });
+    await chooseAddSource(page, "Choose from Library");
+    await page.$$eval(".trip-add-dialog button", (els) => {
+      const back = els.find((el) => (el.textContent ?? "").includes("Choose another source"));
+      if (!back) throw new Error("no back");
+      (back as HTMLElement).click();
+    });
+    await chooseAddSource(page, "Add outside content");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".trip-add-dialog"), { timeout: 5000 });
+    assert.equal(writes.length, writesBeforeCancel, "cancel and source switching write nothing");
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "Add stop");
+
+    const writesBeforeDraft = writes.length;
+    await clickByText(".trip-day:not(.trip-unscheduled)", "Add stop");
+    await chooseAddSource(page, "Add outside content");
+    await page.waitForSelector(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
+    await setInput(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", "Maybe later");
+    await page.$$eval(".trip-add-dialog button", (els) => {
+      const draft = els.find((el) => el.textContent === "Save as Draft");
+      if (!draft) throw new Error("no Save as Draft");
+      (draft as HTMLElement).click();
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll(".trip-stop-title")].some((el) => el.textContent === "Maybe later"), { timeout: 5000 });
+    assert.equal(writes.length, writesBeforeDraft + 1, "Save as Draft is one POST");
+    assert.equal(
+      await page.$$eval(".trip-stop", (els) => {
+        const row = els.find((el) => el.querySelector(".trip-stop-title")?.textContent === "Maybe later");
+        return row?.querySelector(".trip-stop-state")?.textContent ?? "";
+      }),
+      "Draft",
+    );
+    const confirmedPills = await page.$$eval(".trip-stop", (els) =>
+      els
+        .filter((el) => el.querySelector(".trip-stop-title")?.textContent !== "Maybe later")
+        .map((el) => el.querySelector(".trip-stop-state")?.textContent ?? ""),
+    );
+    assert.ok(confirmedPills.every((text) => text === ""), "Confirmed cards have no persistent Confirmed pill");
+    await page.click('[aria-label="Open details for Draft Maybe later"]');
+    await page.waitForSelector(".trip-stop-dialog[open]", { timeout: 5000 });
+    assert.deepEqual(
+      await page.$$eval(".trip-stop-dialog[open] .trip-form-actions button", (els) => els.map((el) => (el.textContent ?? "").trim())),
+      ["Keep stop", "Edit Draft", "Remove Draft"],
+    );
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".trip-stop-dialog"), { timeout: 5000 });
 
     // Removing the referenced Item turns the stop into a visible broken reference.
     database.prepare(`DELETE FROM items WHERE id = 'item-planner'`).run();
@@ -90,8 +170,12 @@ test("trips browser: add from Library, inspect details, and broken references st
     await page.waitForFunction(() => [...document.querySelectorAll(".trip-stop-title")].some((el) => el.textContent === "Missing saved item"), { timeout: 5000 });
     const brokenKinds = await page.$$eval(".trip-stop-kind", (els) => els.map((el) => el.textContent ?? ""));
     assert.ok(brokenKinds.includes("Missing"), "broken reference is labelled as text");
+    await page.click('[aria-label="Open details for Missing saved item"]');
+    await page.waitForSelector(".trip-stop-dialog[open]", { timeout: 5000 });
+    assert.match(await page.$eval(".trip-stop-dialog[open] .trip-stop-facts", (el) => el.textContent ?? ""), /missing from the Library/);
+    await page.keyboard.press("Escape");
     const titles = await page.$$eval(".trip-day:not(.trip-unscheduled) .trip-stop-title", (els) => els.map((el) => el.textContent ?? ""));
-    assert.deepEqual(titles, ["Missing saved item", "Ramen research"], "historical placement is preserved");
+    assert.deepEqual(titles, ["Missing saved item", "Ramen research", "Maybe later"], "historical placement is preserved");
 
     assert.deepEqual(
       writes.filter((entry) => !entry.startsWith("POST /api/trips")),
@@ -187,13 +271,13 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
     const tripId = (await page.evaluate(() => location.hash)).replace("#/trips/", "").replace(/\?.*$/, "");
     const dayId = (database.prepare(`SELECT id FROM trip_days WHERE trip_id = ? ORDER BY position LIMIT 1`).get(tripId) as { id: string }).id;
 
-    // The empty-day "Ask for three opinions" control stays honest: no agent,
+    // The empty-day "Ask agent for options" control stays honest: no agent,
     // no POST, just a status notice.
     await clickTab("Day 2");
     await page.waitForSelector(".trip-empty-card", { timeout: 5000 });
     const writesBeforeAsk = writes.length;
     await page.$eval(".trip-empty-card", (root) => {
-      const button = [...root.querySelectorAll<HTMLButtonElement>("button")].find((el) => el.textContent === "Ask for three opinions");
+      const button = [...root.querySelectorAll<HTMLButtonElement>("button")].find((el) => el.textContent === "Ask agent for options");
       if (!button) throw new Error("no ask button");
       button.click();
     });
@@ -209,8 +293,11 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
     await page.waitForSelector(".trip-stop-state-draft", { timeout: 5000 });
     assert.ok(await page.$eval(".trip-stop-state-draft", (el) => el.textContent === "Draft"), "Draft is exposed as text");
     const writesBeforeKeep = writes.length;
+    await page.click('[aria-label="Open details for Draft Agent idea draft-1"]');
+    await page.waitForSelector(".trip-stop-dialog[open]", { timeout: 5000 });
     await clickAria("Keep Agent idea draft-1");
-    await page.waitForFunction(() => document.querySelector(".trip-stop-state")?.textContent === "Confirmed", { timeout: 5000 });
+    await page.waitForFunction(() => !document.querySelector(".trip-stop-state-draft"), { timeout: 5000 });
+    assert.equal(await page.$(".trip-stop-state"), null, "keeping a Draft leaves no Confirmed pill");
     assert.equal(writes.length, writesBeforeKeep + 1, "keeping one draft is one changeset");
 
     // Keep all drafts: two seeded drafts confirm in exactly one changeset.
@@ -231,10 +318,11 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
 
     // A hole is a durable bounded request at an exact placement.
     const addHole = async (request: string) => {
-      await clickDayText(".trip-day:not(.trip-unscheduled)", "Add a hole");
-      await page.waitForSelector(".trip-add-form input[placeholder='e.g. quiet dinner near Gion']", { timeout: 5000 });
-      await setInput(".trip-add-form input[placeholder='e.g. quiet dinner near Gion']", request);
-      await page.click(".trip-add-form button[type='submit']");
+      await clickDayText(".trip-day:not(.trip-unscheduled)", "Add stop");
+      await chooseAddSource(page, "Add a hole");
+      await page.waitForSelector(".trip-add-dialog input[placeholder='e.g. quiet dinner near Gion']", { timeout: 5000 });
+      await setInput(".trip-add-dialog input[placeholder='e.g. quiet dinner near Gion']", request);
+      await page.click(".trip-add-dialog button[type='submit']");
       await page.waitForFunction((want) => [...document.querySelectorAll(".trip-stop-title")].some((el) => el.textContent === want), { timeout: 5000 }, request);
     };
     const writesBeforeHole = writes.length;
@@ -242,13 +330,16 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
     assert.equal(writes.length, writesBeforeHole + 1);
     const holeCard = await page.$eval(".trip-stop-hole", (el) => el.textContent ?? "");
     assert.match(holeCard, /Hole/);
-    assert.match(holeCard, /Confirmed/);
+    assert.match(holeCard, /Fill/);
+    assert.match(holeCard, /Dismiss/);
+    assert.equal(await page.$(".trip-stop-hole .trip-stop-state"), null, "holes are not labelled Confirmed");
 
     // Filling the hole: one changeset, hole gone, exact place, no gap.
     await clickAria("Fill Quiet dinner near Gion");
-    await page.waitForSelector(".trip-fill", { timeout: 5000 });
-    await setInput(".trip-fill input[placeholder='e.g. Nishiki Market']", "Dinner at Gion");
-    await page.click(".trip-fill .trip-add-form button[type='submit']");
+    await chooseAddSource(page, "Add outside content");
+    await page.waitForSelector(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", { timeout: 5000 });
+    await setInput(".trip-add-dialog input[placeholder='e.g. Nishiki Market']", "Dinner at Gion");
+    await page.click(".trip-add-dialog button[type='submit']");
     await page.waitForFunction(() => !document.querySelector(".trip-stop-hole"), { timeout: 5000 });
     assert.equal(writes.length, writesBeforeHole + 2, "hole add + fill are two changesets total");
     assert.deepEqual(await dayTitles(), ["Agent idea draft-1", "Agent idea draft-2", "Agent idea draft-3", "Dinner at Gion"]);

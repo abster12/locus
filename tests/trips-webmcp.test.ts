@@ -408,6 +408,17 @@ test("apply_trip_changes targets the visible document, forwards exact fields, an
   assert.deepEqual(await apply.execute({ expectedRevision: 1, clientMutationId: "m-3" }), { ok: false, error: "invalid" });
   assert.deepEqual(await apply.execute({ clientMutationId: "m-4", operations }), { ok: false, error: "invalid" });
   assert.deepEqual(await apply.execute({ expectedRevision: 1, operations }), { ok: false, error: "invalid" });
+
+  const addStopSchema = ((apply.inputSchema.properties as { operations: { items: { oneOf: Array<{ properties: Record<string, unknown>; required: string[] }> } } }).operations.items.oneOf[0]!);
+  assert.deepEqual(addStopSchema.properties.state, { type: "string", enum: ["confirmed", "draft"] });
+  assert.equal(addStopSchema.required.includes("state"), false);
+  assert.equal("actor" in addStopSchema.properties, false);
+
+  const drafted = [{ type: "addStop", dayId: "day-1", content: { kind: "outside", title: "Tea tasting", notes: null, url: null }, state: "draft" }];
+  await apply.execute({ expectedRevision: 4, clientMutationId: "m-5", operations: drafted, actor: "user" });
+  const forwardedDraft = calls.apply.at(-1)! as { input: Record<string, unknown> };
+  assert.deepEqual(forwardedDraft.input.operations, drafted, "optional addStop.state round-trips");
+  assert.ok(!("actor" in forwardedDraft.input), "tool input never chooses the actor");
   cleanup();
 });
 

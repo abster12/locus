@@ -252,7 +252,7 @@ test("trips page registers three index tools and nine document tools, applies ex
     // Lifecycle: leaving Trips removes every tool; returning registers one
     // more cycle without duplicates, and the saved itinerary is still there.
     await page.evaluate(() => {
-      location.hash = "#/kitchen";
+      location.hash = "#/recent";
     });
     await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 8) === 0, { timeout: 5000 });
     assert.equal(
@@ -415,7 +415,7 @@ test("record_trip_review appears only after the user asks, saves a visible advis
 
     // Leaving the document disarms the review tool; returning does not re-arm it.
     await page.evaluate(() => {
-      location.hash = "#/kitchen";
+      location.hash = "#/recent";
     });
     await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 9) === 0, { timeout: 5000 });
     await page.evaluate((tripHash: string) => {
@@ -499,7 +499,7 @@ test("arming the review UI needs a successful arm request: failures disarm, a re
 
     // A failed arm leaves nothing behind across navigation.
     await page.evaluate(() => {
-      location.hash = "#/kitchen";
+      location.hash = "#/recent";
     });
     await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 9) === 0, { timeout: 5000 });
     await page.evaluate((tripHash: string) => {
@@ -734,7 +734,7 @@ test("build_trip_draft makes visible Drafts and present_trip_recommendations sho
 
     // Cleanup on navigation, one re-registration cycle on return.
     await page.evaluate(() => {
-      location.hash = "#/kitchen";
+      location.hash = "#/recent";
     });
     await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 8) === 0, { timeout: 5000 });
     await page.evaluate((tripHash: string) => {

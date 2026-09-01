@@ -504,6 +504,70 @@ test("addStop places stops by id, marks them Confirmed, and orders within a day"
   assert.deepEqual(dayStopTitles(unchanged, 0), ["Kiyomizu-dera", "Gion at dusk", "Nishiki Market"]);
 });
 
+test("addStop requested state follows the trusted actor and restores on undo", () => {
+  const { db, trip } = plannerTrip();
+  const day1 = trip.days[0]!.id;
+
+  const humanDraft = apply(db, trip.id, 1, "d1", [addStopOp(day1, "Maybe later", { state: "draft" })], TS, { actor: "agent" })!;
+  const draftStop = humanDraft.trip.days[0]!.stops[0]!;
+  assert.equal(draftStop.state, "draft", "human add with Draft is Draft");
+  assert.deepEqual(draftStop.provenance, { actor: "user", via: "manual" }, "Draft is review state, not authorship");
+  assert.equal(humanDraft.changeset.actor, "user", "body-provided actor is ignored");
+
+  const undoneAdd = undoTripChanges(db, "local", trip.id, { expectedRevision: 2, clientMutationId: "u-add" }, "user")!;
+  assert.deepEqual(undoneAdd.trip.days[0]!.stops, []);
+  const redoneAdd = redoTripChanges(db, "local", trip.id, { expectedRevision: 3, clientMutationId: "r-add" }, "user")!;
+  const redone = redoneAdd.trip.days[0]!.stops[0]!;
+  assert.equal(redone.id, draftStop.id);
+  assert.equal(redone.state, "draft");
+  assert.deepEqual(redone.provenance, { actor: "user", via: "manual" });
+
+  const removed = apply(db, trip.id, 4, "rm", [{ type: "removeStop", stopId: draftStop.id }])!;
+  assert.equal(removed.trip.days[0]!.stops.length, 0);
+  const undoneRemove = undoTripChanges(db, "local", trip.id, { expectedRevision: 5, clientMutationId: "u-rm" }, "user")!;
+  const restored = undoneRemove.trip.days[0]!.stops[0]!;
+  assert.equal(restored.id, draftStop.id);
+  assert.equal(restored.state, "draft");
+  assert.deepEqual(restored.provenance, { actor: "user", via: "manual" });
+
+  const humanConfirmed = apply(db, trip.id, 6, "c1", [addStopOp(day1, "Locked in", { state: "confirmed" })])!;
+  assert.equal(humanConfirmed.trip.days[0]!.stops[1]!.state, "confirmed");
+
+  const agentForced = applyTripChanges(
+    db,
+    "local",
+    trip.id,
+    { expectedRevision: 7, clientMutationId: "a1", operations: [addStopOp(day1, "Agent cafe", { state: "confirmed" })] },
+    "agent",
+  )!;
+  const agentStop = agentForced.trip.days[0]!.stops[2]!;
+  assert.equal(agentStop.state, "draft", "agent add stays Draft even when Confirmed is requested");
+  assert.deepEqual(agentStop.provenance, { actor: "agent", via: "agent" });
+
+  assert.throws(
+    () => apply(db, trip.id, 8, "bad", [addStopOp(day1, "Ghost", { state: "published" })]),
+    (error: unknown) => error instanceof RejectedPayload,
+  );
+  assert.equal(getTrip(db, "local", trip.id)!.revision, 8, "invalid add state does not increment revision");
+  assert.equal(getTrip(db, "local", trip.id)!.days[0]!.stops.length, 3);
+
+  const hole = apply(db, trip.id, 8, "h1", [{ type: "addStop", dayId: day1, content: { kind: "hole", request: "dinner slot" } }])!;
+  const holeId = hole.trip.days[0]!.stops.find((stop) => stop.content.kind === "hole")!.id;
+  const filled = apply(db, trip.id, 9, "f1", [
+    { type: "removeStop", stopId: holeId },
+    addStopOp(day1, "Draft dinner", { state: "draft" }),
+  ])!;
+  const dinner = filled.trip.days[0]!.stops.find((stop) => titleOf(stop) === "Draft dinner")!;
+  assert.equal(dinner.state, "draft");
+  assert.deepEqual(dinner.provenance, { actor: "user", via: "manual" });
+  const undoneFill = undoTripChanges(db, "local", trip.id, { expectedRevision: 10, clientMutationId: "u-fill" }, "user")!;
+  assert.ok(undoneFill.trip.days[0]!.stops.some((stop) => stop.content.kind === "hole"));
+  const redoneFill = redoTripChanges(db, "local", trip.id, { expectedRevision: 11, clientMutationId: "r-fill" }, "user")!;
+  const dinnerAgain = redoneFill.trip.days[0]!.stops.find((stop) => stop.id === dinner.id)!;
+  assert.equal(dinnerAgain.state, "draft");
+  assert.deepEqual(dinnerAgain.provenance, { actor: "user", via: "manual" });
+});
+
 test("updateStop changes fields, keeps identity, and requires a real change", () => {
   const { db, trip } = plannerTrip();
   const day1 = trip.days[0]!.id;

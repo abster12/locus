@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { setupBodyFromForm } from "../app/src/trips-index.tsx";
 import { resolveTripView } from "../app/src/trips-document.tsx";
 import { parseRecommendations } from "../app/src/trips-recommendations.tsx";
-import { buildAddOrFillOps } from "../app/src/trips-stop-ops.ts";
-import { moveStopOp } from "../app/src/trips-stop-row.tsx";
+import { buildAddOrFillOps, isHomePlacement, moveStopOp, placementAt, stepAnchor } from "../app/src/trips-stop-ops.ts";
+import { stopCardMeta, stopFacts, stopOpenLabel, stopSourceLink } from "../app/src/trips-format.ts";
 import { updateStopOps } from "../app/src/trips-stop-editor.tsx";
 import { libraryStopOps } from "../app/src/trips-library-picker.tsx";
 import { holeStopOps, placeholderStopOps } from "../app/src/trips-stop-forms.tsx";
 import { runPlannerMutation } from "../app/src/trips-planner-mutate.ts";
-import type { TripDocument, TripMutationResult, TripStopContent } from "../app/src/api.ts";
+import type { TripDocument, TripMutationResult, TripStop, TripStopContent } from "../app/src/api.ts";
 
 type SetupForm = Parameters<typeof setupBodyFromForm>[0];
 
@@ -131,13 +131,124 @@ test("buildAddOrFillOps shares add vs fill placement for Library and placeholder
     false,
     "Library path omits timing",
   );
+  assert.deepEqual(buildAddOrFillOps({ dayId: "day-1", content, state: "draft" }), [
+    { type: "addStop", dayId: "day-1", content, state: "draft" },
+  ]);
+  assert.deepEqual(
+    buildAddOrFillOps({ dayId: "day-1", content, fill: { holeId: "hole-1" }, state: "draft" }),
+    [
+      { type: "removeStop", stopId: "hole-1" },
+      { type: "addStop", dayId: "day-1", content, state: "draft" },
+    ],
+    "Library and placeholder fill share requested Draft state",
+  );
+  assert.equal("state" in buildAddOrFillOps({ dayId: "day-1", content })[0]!, false, "Add stop omits state");
+  assert.deepEqual(
+    buildAddOrFillOps({
+      dayId: "day-1",
+      content: outside,
+      publicNotes: "  share me  ",
+      privateNotes: "  keep me  ",
+    }),
+    [{ type: "addStop", dayId: "day-1", content: outside, publicNotes: "share me", privateNotes: "keep me" }],
+  );
+  assert.equal("publicNotes" in buildAddOrFillOps({ dayId: "day-1", content: outside, publicNotes: "  " })[0]!, false, "blank notes omit");
 });
 
-test("moveStopOp builds the row's up/down/to-day/to-Unscheduled ops", () => {
-  assert.deepEqual(moveStopOp("stop-2", { beforeStopId: "stop-1" }), { type: "moveStop", stopId: "stop-2", beforeStopId: "stop-1" }, "up uses the previous stop");
-  assert.deepEqual(moveStopOp("stop-1", { afterStopId: "stop-2" }), { type: "moveStop", stopId: "stop-1", afterStopId: "stop-2" }, "down uses the next stop");
-  assert.deepEqual(moveStopOp("stop-1", { dayId: "day-3" }), { type: "moveStop", stopId: "stop-1", dayId: "day-3" }, "to-day sets dayId");
-  assert.deepEqual(moveStopOp("stop-1", { dayId: null }), { type: "moveStop", stopId: "stop-1", dayId: null }, "Unscheduled is dayId null");
+test("moveStopOp and placement helpers use stop ids, never client indexes", () => {
+  const list = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  assert.deepEqual(moveStopOp("b", { beforeStopId: "a" }), { type: "moveStop", stopId: "b", beforeStopId: "a" });
+  assert.deepEqual(moveStopOp("a", { afterStopId: "b" }), { type: "moveStop", stopId: "a", afterStopId: "b" });
+  assert.deepEqual(moveStopOp("a", { dayId: "day-3" }), { type: "moveStop", stopId: "a", dayId: "day-3" });
+  assert.deepEqual(moveStopOp("a", { dayId: null }), { type: "moveStop", stopId: "a", dayId: null });
+  assert.equal(JSON.stringify(moveStopOp("b", { beforeStopId: "a" })).includes("index"), false);
+
+  assert.equal(placementAt(list, "b", "b", "before"), null, "over self is home");
+  assert.equal(placementAt(list, "b", "a", "after"), null, "after A is B's saved place");
+  assert.equal(placementAt(list, "b", "c", "before"), null, "before C is B's saved place");
+  assert.deepEqual(placementAt(list, "b", "a", "before"), { beforeStopId: "a" });
+  assert.deepEqual(placementAt(list, "b", "c", "after"), { afterStopId: "c" });
+  assert.equal(placementAt(list, "a", "missing", "before"), null);
+
+  assert.equal(isHomePlacement(list, "b", { afterStopId: "a" }), true);
+  assert.equal(isHomePlacement(list, "b", { beforeStopId: "c" }), true);
+  assert.equal(isHomePlacement(list, "b", { beforeStopId: "a" }), false);
+
+  assert.deepEqual(stepAnchor(list, "b", null, -1), { beforeStopId: "a" });
+  assert.deepEqual(stepAnchor(list, "b", null, 1), { afterStopId: "c" });
+  assert.deepEqual(stepAnchor(list, "b", { beforeStopId: "a" }, -1), { beforeStopId: "a" }, "top edge clamps");
+  assert.deepEqual(stepAnchor(list, "b", { afterStopId: "c" }, 1), { afterStopId: "c" }, "bottom edge clamps");
+  assert.deepEqual(stepAnchor([{ id: "only" }], "only", null, 1), null);
+});
+
+function stop(overrides: Partial<TripStop> = {}): TripStop {
+  return {
+    id: "s1",
+    dayId: "d1",
+    position: 0,
+    content: { kind: "outside", title: "Gion walk", notes: null, url: null },
+    resolved: null,
+    broken: false,
+    state: "confirmed",
+    provenance: { actor: "user", via: "manual" },
+    publicNotes: "",
+    privateNotes: "",
+    timeWindow: null,
+    durationMinutes: null,
+    reservation: null,
+    storedFacts: [],
+    alternatives: [],
+    createdAt: "2026-09-01T09:00:00.000Z",
+    updatedAt: "2026-09-01T09:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("stop cards name details, hide Confirmed, and keep Draft as text", () => {
+  const confirmed = stop({ timeWindow: "15:00–17:00", durationMinutes: 120 });
+  assert.equal(stopOpenLabel(confirmed), "Open details for Gion walk");
+  assert.deepEqual(stopCardMeta(confirmed), ["Outside", "120 min"]);
+  assert.equal(stopCardMeta(confirmed).includes("Confirmed"), false);
+  const draft = stop({ state: "draft", content: { kind: "outside", title: "Quiet lunch", notes: null, url: null } });
+  assert.equal(stopOpenLabel(draft), "Open details for Draft Quiet lunch");
+  assert.deepEqual(stopCardMeta(draft), ["Draft", "Outside"]);
+});
+
+test("stopFacts expose every applicable bounded field and missing-reference state", () => {
+  const item = stop({
+    content: { kind: "item", itemId: "it-1" },
+    resolved: { kind: "item", title: "Nishiki snack walk", source: "x", url: "https://x.com/a/status/7" },
+    timeWindow: "09:00–11:00",
+    durationMinutes: 90,
+    publicNotes: "Arrive early",
+    privateNotes: "Skip the tour groups",
+    reservation: "none",
+    storedFacts: ["cash only"],
+    alternatives: ["Nishiki upstairs"],
+  });
+  assert.equal(stopOpenLabel(item), "Open details for Nishiki snack walk");
+  assert.deepEqual(stopSourceLink(item), { href: "https://x.com/a/status/7", label: "Open original ↗" });
+  const labels = stopFacts(item).map((fact) => fact.label);
+  assert.deepEqual(labels, ["Time", "Source", "Original", "Public notes", "Private notes", "Reservation", "Stored facts", "Alternatives", "Added"]);
+  assert.equal(stopFacts(item).find((fact) => fact.label === "Original")?.href, "https://x.com/a/status/7");
+  assert.match(stopFacts(item).find((fact) => fact.label === "Added")!.text, /you/);
+
+  const missing = stop({ content: { kind: "item", itemId: "gone" }, broken: true, resolved: null });
+  assert.equal(stopFacts(missing)[0]?.text, "The saved item is missing from the Library.");
+  assert.deepEqual(stopCardMeta(missing), ["Missing"]);
+  assert.equal(stopSourceLink(missing), null);
+
+  const place = stop({
+    content: { kind: "place", placeId: "p1" },
+    resolved: { kind: "place", name: "Fushimi Inari", kindLabel: "landmark", location: "Fushimi Ward" },
+  });
+  assert.deepEqual(
+    stopFacts(place).filter((fact) => fact.label === "Kind" || fact.label === "Location"),
+    [
+      { label: "Kind", text: "landmark" },
+      { label: "Location", text: "Fushimi Ward" },
+    ],
+  );
 });
 
 test("placeholderStopOps trims fields, fills holes, and refuses blank titles", () => {
@@ -187,6 +298,32 @@ test("placeholderStopOps trims fields, fills holes, and refuses blank titles", (
     "placeholder fill is remove+add at the hole's exact place, timing kept as null",
   );
   assert.equal(placeholderStopOps({ dayId: "day-1", title: "   ", notes: "x", url: "", timeWindow: "", duration: "" }), null, "blank title emits no ops");
+  assert.deepEqual(
+    placeholderStopOps({
+      dayId: "day-1",
+      title: "Gion walk",
+      notes: "  source only  ",
+      url: "",
+      timeWindow: "",
+      duration: "",
+      publicNotes: "  for the share  ",
+      privateNotes: "  stay private  ",
+      state: "draft",
+    }),
+    [
+      {
+        type: "addStop",
+        dayId: "day-1",
+        content: { kind: "outside", title: "Gion walk", notes: "source only", url: null },
+        timeWindow: null,
+        durationMinutes: null,
+        publicNotes: "for the share",
+        privateNotes: "stay private",
+        state: "draft",
+      },
+    ],
+    "outside source notes, public notes, and private notes stay distinct; Save as Draft requests Draft",
+  );
 });
 
 test("holeStopOps emits a hole stop and refuses blank requests", () => {
@@ -211,6 +348,32 @@ test("libraryStopOps: place fill is remove+add at the hole's exact place", () =>
       { type: "removeStop", stopId: "hole-1" },
       { type: "addStop", dayId: "day-2", content: { kind: "place", placeId: "place-1" }, beforeStopId: "stop-2" },
     ],
+  );
+  assert.deepEqual(
+    libraryStopOps({
+      dayId: "day-1",
+      content: { kind: "item", itemId: "item-1" },
+      fill: { holeId: "hole-1", beforeStopId: "stop-2" },
+      publicNotes: "share",
+      privateNotes: "secret",
+      state: "draft",
+      timing: { timeWindow: "09:00–11:00", durationMinutes: 90 },
+    }),
+    [
+      { type: "removeStop", stopId: "hole-1" },
+      {
+        type: "addStop",
+        dayId: "day-1",
+        content: { kind: "item", itemId: "item-1" },
+        beforeStopId: "stop-2",
+        timeWindow: "09:00–11:00",
+        durationMinutes: 90,
+        publicNotes: "share",
+        privateNotes: "secret",
+        state: "draft",
+      },
+    ],
+    "Library fill is one remove+add changeset and can request Draft",
   );
 });
 

@@ -103,9 +103,12 @@ test("share HTTP: preview writes nothing, publish/update/revoke, public page nee
     assert.ok(!html.includes("<script"));
     assert.equal((await fetch(`${app.base}/s/${token}x`)).status, 404);
 
-    // Share state is readable by the owner.
+    // Share state is readable by the owner and never includes the raw token.
     const state = await app.get(`/api/trips/${trip.id}/share`);
-    assert.equal(((await state.json()) as { shared: { revision: number } }).shared.revision, 2);
+    const stateBody = (await state.json()) as { shared: { revision: number; token?: string } };
+    assert.equal(stateBody.shared.revision, 2);
+    assert.equal("token" in stateBody.shared, false);
+    assert.ok(!JSON.stringify(stateBody).includes(token));
 
     // A private edit stays private until an explicit publish; republish
     // replaces the token.

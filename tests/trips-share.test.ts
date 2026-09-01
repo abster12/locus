@@ -154,14 +154,20 @@ test("the share allowlist keeps only public fields and drops private ones by con
   }
 });
 
-test("publish stores only a token hash, the raw token stays out of the database", () => {
+test("publish stores only a token hash, the raw token stays out of the database and owner state", () => {
   const db = mem();
   const { trip } = seededTrip(db);
   const result = publish(db, trip.id, 3, "p1");
   assert.ok(result.token.length >= 43, "token is long enough to be unguessable");
-  const row = db.prepare(`SELECT token_hash FROM trip_share_snapshots WHERE trip_id = ?`).get(trip.id) as { token_hash: string };
-  assert.notEqual(row.token_hash, result.token, "the raw token is never stored");
+  const cols = db.prepare(`PRAGMA table_info(trip_share_snapshots)`).all() as { name: string }[];
+  assert.equal(cols.some((column) => column.name === "token"), false, "no raw-token column");
+  const row = db.prepare(`SELECT * FROM trip_share_snapshots WHERE trip_id = ?`).get(trip.id) as { token_hash: string };
+  assert.ok(!JSON.stringify(row).includes(result.token), "the raw token is never stored");
+  assert.notEqual(row.token_hash, result.token);
   assert.equal(row.token_hash, createHash("sha256").update(result.token, "utf8").digest("hex"));
+  const owner = getShareState(db, "local", trip.id);
+  assert.equal(owner && "token" in owner, false, "owner state does not carry the token");
+  assert.ok(!JSON.stringify(owner).includes(result.token));
 
   // The token appears nowhere on the private document or its summary.
   assert.ok(!JSON.stringify(listTrips(db, "local")).includes(result.token));

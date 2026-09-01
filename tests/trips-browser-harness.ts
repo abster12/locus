@@ -78,6 +78,12 @@ export function setInput(page: Page, selector: string, value: string): Promise<v
   );
 }
 
+/** Open the Add Stop dialog's named source. The dialog must already be open. */
+export async function chooseAddSource(page: Page, source: "Choose from Library" | "Add outside content" | "Add a hole"): Promise<void> {
+  await page.waitForSelector(".trip-add-dialog[open]", { timeout: 5000 });
+  await clickByText(page, ".trip-add-dialog", source);
+}
+
 /** Click the one button inside `scope` whose text is exactly `text`. */
 export function clickByText(page: Page, scope: string, text: string): Promise<void> {
   return page.$eval(

@@ -5,8 +5,10 @@ import { TripSetupForm } from "./trips-index.tsx";
 import { OverviewView } from "./trips-overview.tsx";
 import { ScheduleView } from "./trips-schedule.tsx";
 import { DayPlanner } from "./trips-stops.tsx";
+import { AddStopDialog } from "./trips-add-stop.tsx";
+import type { OpenAdd } from "./trips-stop-ops.ts";
 import { TripAdvisories } from "./trips-advisories.tsx";
-import { ExportControl, ShareControl } from "./trips-share.tsx";
+import { ExportControl, ShareButton, SharePreviewPanel, ShareStatus, useTripShare } from "./trips-share.tsx";
 import { parseRecommendations, RecommendationDrawer, type TripRecommendations } from "./trips-recommendations.tsx";
 
 export type TripViewKind = { view: "overview" | "schedule" | "day"; dayId: string | null };
@@ -116,6 +118,136 @@ function RenameControl({ trip, onRenamed }: { trip: TripDocument; onRenamed: (tr
   );
 }
 
+function TripDocumentMenu({
+  trip,
+  busy,
+  run,
+  setTrip,
+  setEditing,
+  reviewRequested,
+  onRequestReview,
+  share,
+}: {
+  trip: TripDocument;
+  busy: boolean;
+  run: (action: () => Promise<void>) => void;
+  setTrip: (trip: TripDocument) => void;
+  setEditing: (open: boolean) => void;
+  reviewRequested: boolean;
+  onRequestReview: (tripId: string) => void;
+  share: ReturnType<typeof useTripShare>;
+}) {
+  return (
+    <details className="trip-doc-menu">
+      <summary aria-label="Trip Document menu">⋯</summary>
+      <div className="trip-doc-menu-list">
+        <button type="button" className="btn" disabled={busy} onClick={() => setEditing(true)}>
+          Edit setup
+        </button>
+        <RenameControl trip={trip} onRenamed={setTrip} />
+        {reviewRequested ? (
+          <span className="trip-review-armed" role="status">
+            Your browser agent can now save an advisory review of this Trip Document.
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const id = trip.id;
+                await api.armTripReview(id, trip.revision);
+                onRequestReview(id);
+              })
+            }
+          >
+            Ask agent to review
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              const result = await api.duplicateTrip(trip.id, trip.revision);
+              location.hash = `#/trips/${result.trip.id}`;
+            })
+          }
+        >
+          Duplicate
+        </button>
+        {trip.archivedAt ? (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const result = await api.restoreTrip(trip.id, trip.revision);
+                setTrip(result.trip);
+              })
+            }
+          >
+            Restore
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await api.archiveTrip(trip.id, trip.revision);
+                location.hash = "#/trips";
+              })
+            }
+          >
+            Archive
+          </button>
+        )}
+        <details className="trip-doc-export">
+          <summary>Export</summary>
+          <ExportControl trip={trip} />
+        </details>
+        {share.shared ? (
+          <>
+            <button
+              type="button"
+              className="btn"
+              disabled={share.busy}
+              onClick={(event) => {
+                event.currentTarget.closest("details.trip-doc-menu")?.removeAttribute("open");
+                void share.preview();
+              }}
+            >
+              Update shared version
+            </button>
+            <button type="button" className="btn danger" disabled={share.busy} onClick={() => void share.revoke()}>
+              Revoke
+            </button>
+          </>
+        ) : null}
+        <button
+          type="button"
+          className="btn danger"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              if (!window.confirm("Delete this Trip Document? Its days are removed. Saved Items and Places stay in your Library.")) return;
+              await api.deleteTrip(trip.id, trip.revision);
+              location.hash = "#/trips";
+            })
+          }
+        >
+          Delete
+        </button>
+      </div>
+    </details>
+  );
+}
+
 function TripContextSection({ trip }: { trip: TripDocument }) {
   const entries: [string, string[]][] = [
     ["Lodging anchors", trip.context.lodgingAnchors],
@@ -190,6 +322,8 @@ export function TripDocumentPage({
   const busyRef = useRef(false);
   const [recs, setRecs] = useState<TripRecommendations | null>(null);
   const [presented, setPresented] = useState<TripRecommendations | null>(null);
+  const [openAdd, setOpenAdd] = useState<OpenAdd>(null);
+  const share = useTripShare(trip);
 
   // Recommendation presentation is transient page state (like Reading): the
   // sheet shows what was presented, dismissal keeps the document untouched,
@@ -215,6 +349,10 @@ export function TripDocumentPage({
     };
     window.addEventListener("locus:trip-updated", onUpdated);
     return () => window.removeEventListener("locus:trip-updated", onUpdated);
+  }, [tripId]);
+
+  useEffect(() => {
+    setOpenAdd(null);
   }, [tripId]);
 
   useEffect(() => {
@@ -284,6 +422,21 @@ export function TripDocumentPage({
           <h1>{trip?.title ?? "Trip Document"}</h1>
           {trip ? <span className="count">revision {trip.revision}</span> : null}
           {trip?.archivedAt ? <span className="chip">Archived</span> : null}
+          {trip && !editing ? (
+            <div className="trip-doc-actions">
+              <ShareButton share={share} />
+              <TripDocumentMenu
+                trip={trip}
+                busy={busy}
+                run={run}
+                setTrip={setTrip}
+                setEditing={setEditing}
+                reviewRequested={reviewRequested}
+                onRequestReview={onRequestReview}
+                share={share}
+              />
+            </div>
+          ) : null}
         </div>
         <p className="pagesub">
           <a href="#/trips">Back to Trips</a>
@@ -307,6 +460,8 @@ export function TripDocumentPage({
       ) : null}
       {trip && !editing ? (
         <div className="trip-detail">
+          {share.panel ? <SharePreviewPanel share={share} /> : null}
+          <ShareStatus share={share} />
           <dl className="trip-facts">
             <div>
               <dt>Destination</dt>
@@ -330,7 +485,9 @@ export function TripDocumentPage({
             ) : null}
           </dl>
           <TripNav trip={trip} active={resolveTripView(trip, view)} />
-          {resolveTripView(trip, view).view === "overview" ? <OverviewView trip={trip} /> : null}
+          {resolveTripView(trip, view).view === "overview" ? (
+            <OverviewView trip={trip} onAddFirstStop={() => setOpenAdd({ dayId: trip.days[0]?.id ?? null, source: null })} />
+          ) : null}
           {resolveTripView(trip, view).view === "schedule" ? <ScheduleView trip={trip} /> : null}
           {resolveTripView(trip, view).view === "day" ? (
             <DayPlanner
@@ -339,6 +496,8 @@ export function TripDocumentPage({
               focusDayId={resolveTripView(trip, view).dayId}
               presentedRecs={presented}
               onOpenRecs={() => setRecs(presented)}
+              openAdd={openAdd}
+              setOpenAdd={setOpenAdd}
             />
           ) : null}
           <TripAdvisories trip={trip} busy={busy} onDismiss={(advisoryId) => dismissAdvisory(trip, advisoryId)} />
@@ -353,96 +512,13 @@ export function TripDocumentPage({
               })
             }
           />
-          <p className="trip-detail-actions">
-            <button type="button" className="btn" disabled={busy} onClick={() => setEditing(true)}>
-              Edit setup
-            </button>
-            <RenameControl trip={trip} onRenamed={setTrip} />
-            <ShareControl trip={trip} />
-            {reviewRequested ? (
-              <span className="trip-review-armed" role="status">
-                Your browser agent can now save an advisory review of this Trip Document.
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="btn"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const id = trip.id;
-                    await api.armTripReview(id, trip.revision);
-                    onRequestReview(id);
-                  })
-                }
-              >
-                Ask agent to review
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  const result = await api.duplicateTrip(trip.id, trip.revision);
-                  location.hash = `#/trips/${result.trip.id}`;
-                })
-              }
-            >
-              Duplicate
-            </button>
-            {trip.archivedAt ? (
-              <button
-                type="button"
-                className="btn"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const result = await api.restoreTrip(trip.id, trip.revision);
-                    setTrip(result.trip);
-                  })
-                }
-              >
-                Restore
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    await api.archiveTrip(trip.id, trip.revision);
-                    // The document just left the active list; return to the
-                    // index instead of staying on an archived route.
-                    location.hash = "#/trips";
-                  })
-                }
-              >
-                Archive
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn danger"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  if (!window.confirm("Delete this Trip Document? Its days are removed. Saved Items and Places stay in your Library.")) return;
-                  await api.deleteTrip(trip.id, trip.revision);
-                  location.hash = "#/trips";
-                })
-              }
-            >
-              Delete
-            </button>
-          </p>
-          <ExportControl trip={trip} />
         </div>
       ) : null}
       {!trip && !missing && !err ? <p className="quiet">Opening the Trip Document…</p> : null}
       {recs && trip ? <RecommendationDrawer recs={recs} trip={trip} onTrip={setTrip} onClose={() => setRecs(null)} /> : null}
+      {openAdd && trip ? (
+        <AddStopDialog trip={trip} openAdd={openAdd} onOpenAdd={setOpenAdd} onClose={() => setOpenAdd(null)} onTrip={setTrip} />
+      ) : null}
     </section>
   );
 }
