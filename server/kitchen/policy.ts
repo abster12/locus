@@ -45,6 +45,19 @@ export type RecipeWriteInput = {
   expectedSourceRevision: string;
   status: RecipeStatus;
   draft: unknown;
+  allowGenerate?: boolean;
+};
+
+export type TonightOp =
+  | { op: "add"; itemId: string }
+  | { op: "remove"; itemId: string }
+  | { op: "reorder"; itemIds: string[] };
+
+export type TonightChangesInput = {
+  expectedRevision: number;
+  clientMutationId: string;
+  instruction: string | null;
+  operations: TonightOp[];
 };
 
 export type RecipeScore = {
@@ -71,6 +84,10 @@ const SPAN_KEYS = new Set(["start", "end", "text"]);
 export const MAX_RECIPE_JSON_BYTES = 256 * 1024;
 export const MAX_TONIGHT_ENTRIES = 100;
 export const MAX_KITCHEN_SEARCH = 200;
+export const MAX_TONIGHT_MUTATION_ID = 100;
+export const MAX_TONIGHT_INSTRUCTION = 2000;
+export const MAX_TONIGHT_OPS = 200;
+const TONIGHT_ITEM_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export function normalizeCaption(raw: string | null | undefined): string {
   return (raw ?? "").replace(/\r\n/g, "\n").trim();
@@ -186,6 +203,54 @@ export function validateRecipeDraft(raw: unknown, caption: string, actor: Recipe
     if (kinds.has("user")) throw new RejectedPayload("agent cannot store user evidence");
   }
   return draft;
+}
+
+export function validateTonightChanges(raw: unknown): TonightChangesInput {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RejectedPayload("invalid Tonight changes");
+  const rec = raw as Record<string, unknown>;
+  rejectUnknown(rec, new Set(["expectedRevision", "clientMutationId", "instruction", "operations"]));
+  const expectedRevision = rec.expectedRevision;
+  if (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 1) {
+    throw new RejectedPayload("expectedRevision must be a positive integer");
+  }
+  if (typeof rec.clientMutationId !== "string" || rec.clientMutationId.length === 0 || rec.clientMutationId.length > MAX_TONIGHT_MUTATION_ID) {
+    throw new RejectedPayload("invalid clientMutationId");
+  }
+  let instruction: string | null = null;
+  if (rec.instruction !== undefined && rec.instruction !== null) {
+    if (typeof rec.instruction !== "string" || rec.instruction.length > MAX_TONIGHT_INSTRUCTION) {
+      throw new RejectedPayload("invalid instruction");
+    }
+    instruction = rec.instruction.length === 0 ? null : rec.instruction;
+  }
+  if (!Array.isArray(rec.operations) || rec.operations.length === 0 || rec.operations.length > MAX_TONIGHT_OPS) {
+    throw new RejectedPayload("invalid Tonight operations");
+  }
+  return {
+    expectedRevision: expectedRevision as number,
+    clientMutationId: rec.clientMutationId,
+    instruction,
+    operations: rec.operations.map(readTonightOp),
+  };
+}
+
+function readTonightOp(raw: unknown): TonightOp {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new RejectedPayload("invalid Tonight operation");
+  const rec = raw as Record<string, unknown>;
+  if (rec.op === "add" || rec.op === "remove") {
+    rejectUnknown(rec, new Set(["op", "itemId"]));
+    if (typeof rec.itemId !== "string" || !TONIGHT_ITEM_ID.test(rec.itemId)) throw new RejectedPayload("invalid itemId");
+    return { op: rec.op, itemId: rec.itemId };
+  }
+  if (rec.op !== "reorder") throw new RejectedPayload("invalid Tonight operation");
+  rejectUnknown(rec, new Set(["op", "itemIds"]));
+  if (!Array.isArray(rec.itemIds) || rec.itemIds.length > MAX_TONIGHT_ENTRIES) throw new RejectedPayload("invalid Tonight order");
+  const itemIds = rec.itemIds.map((id) => {
+    if (typeof id !== "string" || !TONIGHT_ITEM_ID.test(id)) throw new RejectedPayload("invalid itemId");
+    return id;
+  });
+  if (new Set(itemIds).size !== itemIds.length) throw new RejectedPayload("invalid Tonight order");
+  return { op: "reorder", itemIds };
 }
 
 export function recipeEvidenceKinds(draft: RecipeDraftV1): Set<RecipeEvidence["kind"]> {

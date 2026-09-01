@@ -1,6 +1,6 @@
 import type { Db } from "./open.ts";
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -320,6 +320,21 @@ CREATE INDEX IF NOT EXISTS kitchen_tonight_library_position
 CREATE INDEX IF NOT EXISTS kitchen_recipe_library_item
   ON kitchen_recipe_documents(library_id, item_id);
 
+CREATE TABLE IF NOT EXISTS kitchen_tonight_state (
+  library_id TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kitchen_tonight_mutations (
+  library_id TEXT NOT NULL,
+  client_mutation_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  result_revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(library_id, client_mutation_id)
+);
+
 CREATE TABLE IF NOT EXISTS atlas_places (
   id TEXT PRIMARY KEY,
   library_id TEXT NOT NULL,
@@ -589,6 +604,7 @@ export function migrateSchema(db: Db): void {
     if (current < 19) migrateTripMutationReceipts(db);
     if (current < 20) migrateTripMutationReceiptsOwnerScope(db);
     if (current < 21) migrateTripReviewIntents(db);
+    if (current < 22) migrateKitchenTonightConcurrency(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -871,6 +887,25 @@ function migrateTripReviewIntents(db: Db): void {
       created_at TEXT NOT NULL,
       PRIMARY KEY (library_id, session_id, trip_id),
       FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+/** Tonight revision + mutation receipts for atomic WebMCP composition. */
+function migrateKitchenTonightConcurrency(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS kitchen_tonight_state (
+      library_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS kitchen_tonight_mutations (
+      library_id TEXT NOT NULL,
+      client_mutation_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      result_revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(library_id, client_mutation_id)
     );
   `);
 }

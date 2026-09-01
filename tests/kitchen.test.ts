@@ -13,6 +13,7 @@ import {
   LOCAL_LIBRARY_ID,
   MAX_TONIGHT_ENTRIES,
   addTonight,
+  applyTonightChanges,
   captionRevision,
   canWatchItem,
   clearTonight,
@@ -21,6 +22,7 @@ import {
   getKitchenIndex,
   getKitchenItem,
   getTonight,
+  getTonightView,
   importKitchenRecords,
   kitchenAvailability,
   normalizeCaption,
@@ -108,6 +110,8 @@ test("schema 9 creates Kitchen tables and wipe clears them", () => {
   wipeLibrary(value);
   assert.equal((value.prepare(`SELECT COUNT(*) AS n FROM kitchen_recipe_documents`).get() as { n: number }).n, 0);
   assert.equal((value.prepare(`SELECT COUNT(*) AS n FROM kitchen_tonight_entries`).get() as { n: number }).n, 0);
+  assert.equal((value.prepare(`SELECT COUNT(*) AS n FROM kitchen_tonight_state`).get() as { n: number }).n, 0);
+  assert.equal((value.prepare(`SELECT COUNT(*) AS n FROM kitchen_tonight_mutations`).get() as { n: number }).n, 0);
   value.close();
 });
 
@@ -486,5 +490,193 @@ test("Kitchen operations do not mutate Item organization", () => {
   const after = value.prepare(`SELECT title, body FROM items WHERE id = 'food-1'`).get() as { title: string; body: string };
   assert.deepEqual(after, before);
   assert.equal((value.prepare(`SELECT COUNT(*) AS n FROM memberships WHERE item_id = 'food-1'`).get() as { n: number }).n, tags.n);
+  value.close();
+});
+
+test("agent recipe writes stay Draft, need consent for generated evidence, and leave Tonight alone", () => {
+  const value = db();
+  const body = "200 g paneer\nGrill it";
+  insertItem(value, "food-1", { body });
+  food(value, "food-1");
+  addTonight(value, LIB, "food-1", NOW);
+  const tonightBefore = getTonight(value, LIB).map((row) => row.id);
+  const rev = captionRevision(normalizeCaption(body));
+  const captionDraft = {
+    version: 1,
+    ingredients: [
+      {
+        id: "ing-1",
+        raw: "200 g paneer",
+        name: "paneer",
+        evidence: { kind: "caption", spans: [{ start: 0, end: 12, text: "200 g paneer" }] },
+      },
+    ],
+    steps: [],
+  };
+  const generated = {
+    version: 1,
+    ingredients: [{ id: "ing-1", raw: "salt", name: "salt", evidence: { kind: "generated" } }],
+    steps: [{ id: "step-1", instruction: "Cook.", ingredientIds: ["ing-1"], evidence: { kind: "generated" } }],
+  };
+  assert.throws(
+    () => putRecipeDocument(value, LIB, "food-1", { expectedSourceRevision: rev, status: "draft", draft: generated }, "agent", NOW),
+    RejectedPayload,
+  );
+  assert.equal(getKitchenItem(value, LIB, "food-1")?.recipe, null);
+  const mixed = {
+    version: 1,
+    ingredients: captionDraft.ingredients,
+    steps: generated.steps,
+  };
+  assert.throws(
+    () => putRecipeDocument(value, LIB, "food-1", { expectedSourceRevision: rev, status: "draft", draft: mixed, allowGenerate: true }, "agent", NOW),
+    RejectedPayload,
+  );
+  const saved = putRecipeDocument(
+    value,
+    LIB,
+    "food-1",
+    { expectedSourceRevision: rev, status: "reviewed", draft: captionDraft },
+    "agent",
+    NOW,
+  );
+  assert.equal(saved.status, "draft");
+  assert.equal(saved.updatedBy, "agent");
+  assert.equal(saved.score.unreferenced[0]?.id, "ing-1");
+  const suggested = putRecipeDocument(
+    value,
+    LIB,
+    "food-1",
+    { expectedSourceRevision: rev, status: "reviewed", draft: generated, allowGenerate: true },
+    "agent",
+    NOW,
+  );
+  assert.equal(suggested.status, "draft");
+  assert.equal(suggested.provenance, "generated");
+  assert.throws(
+    () => putRecipeDocument(value, LIB, "food-1", { expectedSourceRevision: "deadbeef", status: "draft", draft: captionDraft }, "agent", NOW),
+    KitchenConflict,
+  );
+  assert.equal((getKitchenItem(value, LIB, "food-1")?.recipe as { status?: string } | null)?.status, "draft");
+  assert.deepEqual(getTonight(value, LIB).map((row) => row.id), tonightBefore);
+  value.close();
+});
+
+test("applyTonightChanges is atomic, revision-checked, and idempotent", () => {
+  const value = db();
+  insertItem(value, "a", { body: "a" });
+  insertItem(value, "b", { body: "b" });
+  insertItem(value, "c", { body: "c" });
+  insertItem(value, "plain", { body: "no" });
+  food(value, "a");
+  food(value, "b");
+  food(value, "c");
+  assert.equal(getTonightView(value, LIB).revision, 1);
+  const first = applyTonightChanges(
+    value,
+    LIB,
+    { expectedRevision: 1, clientMutationId: "mut-1", operations: [{ op: "add", itemId: "a" }, { op: "add", itemId: "b" }] },
+    NOW,
+  );
+  assert.equal(first.replayed, false);
+  assert.equal(first.revision, 2);
+  assert.deepEqual(first.entries.map((row) => row.itemId), ["a", "b"]);
+  const replay = applyTonightChanges(
+    value,
+    LIB,
+    { expectedRevision: 1, clientMutationId: "mut-1", operations: [{ op: "add", itemId: "a" }, { op: "add", itemId: "b" }] },
+    NOW,
+  );
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.revision, 2);
+  assert.equal(getTonight(value, LIB).length, 2);
+  assert.throws(
+    () => applyTonightChanges(
+      value,
+      LIB,
+      { expectedRevision: 1, clientMutationId: "mut-1", operations: [{ op: "add", itemId: "c" }] },
+      NOW,
+    ),
+    KitchenConflict,
+  );
+  assert.throws(
+    () => applyTonightChanges(
+      value,
+      LIB,
+      { expectedRevision: 1, clientMutationId: "mut-stale", operations: [{ op: "add", itemId: "c" }] },
+      NOW,
+    ),
+    KitchenConflict,
+  );
+  assert.throws(
+    () => applyTonightChanges(
+      value,
+      LIB,
+      { expectedRevision: 2, clientMutationId: "mut-dup", operations: [{ op: "add", itemId: "a" }] },
+      NOW,
+    ),
+    KitchenConflict,
+  );
+  assert.throws(
+    () => applyTonightChanges(
+      value,
+      LIB,
+      { expectedRevision: 2, clientMutationId: "mut-plain", operations: [{ op: "add", itemId: "plain" }] },
+      NOW,
+    ),
+    KitchenConflict,
+  );
+  const body = "mix";
+  insertItem(value, "food-1", { body });
+  food(value, "food-1");
+  putRecipeDocument(
+    value,
+    LIB,
+    "food-1",
+    { expectedSourceRevision: captionRevision(normalizeCaption(body)), status: "reviewed", draft: draft() },
+    "user",
+    NOW,
+  );
+  const ordered = applyTonightChanges(
+    value,
+    LIB,
+    {
+      expectedRevision: 2,
+      clientMutationId: "mut-2",
+      instruction: "cook these",
+      operations: [{ op: "add", itemId: "c" }, { op: "reorder", itemIds: ["c", "a", "b"] }],
+    },
+    NOW,
+  );
+  assert.deepEqual(ordered.entries.map((row) => row.itemId), ["c", "a", "b"]);
+  value.prepare(`DELETE FROM items WHERE id = 'c'`).run();
+  const missing = getTonightView(value, LIB);
+  assert.equal(missing.entries.find((row) => row.itemId === "c")?.item, null);
+  const removed = applyTonightChanges(
+    value,
+    LIB,
+    { expectedRevision: missing.revision, clientMutationId: "mut-3", operations: [{ op: "remove", itemId: "c" }] },
+    NOW,
+  );
+  assert.deepEqual(removed.entries.map((row) => row.itemId), ["a", "b"]);
+  assert.equal((getKitchenItem(value, LIB, "food-1")?.recipe as { status?: string } | null)?.status, "reviewed");
+  applyTonightChanges(
+    value,
+    "other",
+    { expectedRevision: 1, clientMutationId: "mut-1", operations: [{ op: "add", itemId: "a" }] },
+    NOW,
+  );
+  assert.deepEqual(getTonight(value, LIB).map((row) => row.itemId), ["a", "b"]);
+  assert.deepEqual(getTonight(value, "other").map((row) => row.itemId), ["a"]);
+  assert.throws(
+    () => applyTonightChanges(
+      value,
+      LIB,
+      { expectedRevision: removed.revision, clientMutationId: "mut-bad", operations: [{ op: "remove", itemId: "missing" }, { op: "add", itemId: "food-1" }] },
+      NOW,
+    ),
+    RejectedPayload,
+  );
+  assert.deepEqual(getTonight(value, LIB).map((row) => row.itemId), ["a", "b"]);
   value.close();
 });

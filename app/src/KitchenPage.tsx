@@ -9,6 +9,16 @@ import {
   type TonightEntry,
 } from "./api.ts";
 import { firstVisual, pubLabel, who } from "./item-content.ts";
+import {
+  attachKitchenRecipeWebmcp,
+  detectKitchenRecipeWebmcpRuntime,
+  type KitchenRecipeWebmcpHost,
+} from "./kitchen-recipe-webmcp.ts";
+import {
+  attachKitchenTonightWebmcp,
+  type KitchenTonightWebmcpHost,
+  type KitchenTonightWebmcpItemSummary,
+} from "./kitchen-tonight-webmcp.ts";
 import { SourceMark } from "./SourceMark.tsx";
 import { instagramEmbedUrl, youtubeEmbedUrl } from "../../core/sanitize.ts";
 
@@ -25,8 +35,8 @@ function normalizeCaption(raw: string | null | undefined): string {
   return (raw ?? "").replace(/\r\n/g, "\n").trim();
 }
 
-async function captionRevisionOf(item: ItemCard): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalizeCaption(item.body)));
+async function captionRevisionOf(caption: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(caption));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -49,6 +59,28 @@ function safeHttpUrl(raw: string): string | null {
 
 function openOriginal(url: string): string | null {
   return safeHttpUrl(url);
+}
+
+// Bounded Recipe Box summary handed to the agent: identity/display fields and
+// the recipe summary only — never captions, media, or notes.
+function pickRecipeFact(top: unknown, nested: unknown): string | null {
+  return typeof top === "string" ? top : typeof nested === "string" ? nested : null;
+}
+
+function agentRecipeTitle(recipe: KitchenItem["recipe"]): string | null {
+  if (!recipe) return null;
+  return pickRecipeFact(recipe.title, "draft" in recipe ? recipe.draft.title : undefined);
+}
+
+function agentItemSummary(item: KitchenItem): KitchenTonightWebmcpItemSummary {
+  return {
+    itemId: item.item.id,
+    displayTitle: item.displayTitle,
+    availability: item.availability,
+    recipe: item.recipe
+      ? { id: item.recipe.id, status: item.recipe.status, title: agentRecipeTitle(item.recipe) }
+      : null,
+  };
 }
 
 export function KitchenPage() {
@@ -100,6 +132,59 @@ export function KitchenPage() {
     };
     document.addEventListener("pointerdown", onPoint);
     return () => document.removeEventListener("pointerdown", onPoint);
+  }, []);
+
+  // Kitchen Tonight WebMCP lives and dies with this index route (unmounting
+  // on #/kitchen/:id removes it). Filters flow through the ref so search and
+  // source changes never re-register; nothing here runs an agent on mount —
+  // the tools only exist so an explicitly asked agent can read and compose.
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  useEffect(() => {
+    const host: KitchenTonightWebmcpHost = {
+      getPageFilters: () => ({ q: queryRef.current.q, source: queryRef.current.source }),
+      getTonight: async () => {
+        const state = await api.tonightState();
+        return {
+          revision: state.revision,
+          entries: state.entries.map((entry) => ({
+            id: entry.id,
+            itemId: entry.itemId,
+            order: entry.order,
+            item: entry.item ? agentItemSummary(entry.item) : null,
+          })),
+        };
+      },
+      search: async (input) => {
+        const params = indexQueryString({ q: input.q ?? "", source: input.source ?? "" }, input.cursor);
+        const qs = params ? `${params}&limit=${input.limit}` : `limit=${input.limit}`;
+        const page = await api.kitchen(qs);
+        return { items: page.items.map(agentItemSummary), nextCursor: page.nextCursor };
+      },
+      apply: async (input) => {
+        // The adapter has validated operation shape; the server re-validates.
+        const result = await api.applyTonightChanges(input as Parameters<typeof api.applyTonightChanges>[0]);
+        // Replay is a prior receipt snapshot — refetch live Tonight instead of painting it.
+        if (!result.replayed) setTonight(result.entries);
+        else setTonight((await api.tonightState()).entries);
+        return {
+          revision: result.revision,
+          replayed: result.replayed,
+          entries: result.entries.map((entry) => ({
+            id: entry.id,
+            itemId: entry.itemId,
+            order: entry.order,
+            item: entry.item ? agentItemSummary(entry.item) : null,
+          })),
+        };
+      },
+      log(entry) {
+        if (import.meta.env.DEV) {
+          console.info("kitchen-tonight-webmcp", entry.tool, entry.outcome, `${entry.durationMs}ms`, entry.resultCount ?? "");
+        }
+      },
+    };
+    return attachKitchenTonightWebmcp(host);
   }, []);
 
   useLayoutScrollRestore(page);
@@ -444,6 +529,26 @@ export function KitchenDetail({ itemId, mode }: { itemId: string; mode: "auto" |
   const [tonightIds, setTonightIds] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  const [webmcpReady, setWebmcpReady] = useState(false);
+  const [generationAllowed, setGenerationAllowed] = useState(false);
+  const [consentItemId, setConsentItemId] = useState(itemId);
+  const [boundItemId, setBoundItemId] = useState<string | null>(null);
+  const generationAllowedRef = useRef({ itemId, allowed: false });
+
+  if (consentItemId !== itemId) {
+    setConsentItemId(itemId);
+    setGenerationAllowed(false);
+    generationAllowedRef.current = { itemId, allowed: false };
+  }
+
+  const setGenerationConsent = (allowed: boolean): void => {
+    generationAllowedRef.current = { itemId, allowed };
+    setGenerationAllowed(allowed);
+  };
+
+  useEffect(() => {
+    setBoundItemId(null);
+  }, [itemId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -451,9 +556,15 @@ export function KitchenDetail({ itemId, mode }: { itemId: string; mode: "auto" |
     setMissing(false);
     api
       .kitchenItem(itemId, controller.signal)
-      .then((item) => setData(item))
+      .then((item) => {
+        setData(item);
+        setBoundItemId(itemId);
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setMissing(true);
+        if (!controller.signal.aborted) {
+          setMissing(true);
+          setBoundItemId(null);
+        }
       });
     api
       .tonight(controller.signal)
@@ -461,6 +572,71 @@ export function KitchenDetail({ itemId, mode }: { itemId: string; mode: "auto" |
       .catch(() => {});
     return () => controller.abort();
   }, [itemId, reloadKey]);
+
+  // Tools register only after this route's Item is authorized. Reloads keep
+  // boundItemId so propose can refresh the score without dropping the tools.
+  useEffect(() => {
+    if (boundItemId !== itemId) {
+      setWebmcpReady(false);
+      return;
+    }
+    setWebmcpReady(detectKitchenRecipeWebmcpRuntime() != null);
+    const authorizedId = boundItemId;
+    const host: KitchenRecipeWebmcpHost = {
+      getVisibleItemId: () => authorizedId,
+      generationAllowed: () => {
+        const consent = generationAllowedRef.current;
+        return consent.allowed && consent.itemId === authorizedId;
+      },
+      async getSource(id) {
+        // Bound to the Item authorized when these tools registered — not the
+        // live route ref, which can change one paint before cleanup.
+        if (id !== authorizedId) return null;
+        try {
+          const row = await api.kitchenItem(id);
+          const caption = normalizeCaption(row.caption);
+          return {
+            itemId: row.item.id,
+            displayTitle: row.displayTitle,
+            caption: caption || null,
+            sourceRevision: await captionRevisionOf(caption),
+            availability: row.availability,
+            canWatch: row.canWatch,
+            recipe: row.recipe
+              ? {
+                  id: row.recipe.id,
+                  status: row.recipe.status,
+                  // Detail routes return the full document; the index summary
+                  // variant has no provenance field and never reaches this host.
+                  provenance: "provenance" in row.recipe ? row.recipe.provenance : "user",
+                  sourceChanged: row.recipe.sourceChanged,
+                  title: pickRecipeFact(row.recipe.title, "draft" in row.recipe ? row.recipe.draft.title : undefined),
+                  servings: pickRecipeFact(row.recipe.servings, "draft" in row.recipe ? row.recipe.draft.servings : undefined),
+                  totalTime: pickRecipeFact(row.recipe.totalTime, "draft" in row.recipe ? row.recipe.draft.totalTime : undefined),
+                  ...("draft" in row.recipe ? { draft: row.recipe.draft, score: row.recipe.score } : {}),
+                }
+              : null,
+          };
+        } catch (error) {
+          if (error instanceof Error && (error as { status?: unknown }).status === 404) return null;
+          throw error;
+        }
+      },
+      async propose(id, input) {
+        if (id !== authorizedId) throw Object.assign(new Error("item not found"), { status: 404 });
+        const out = await api.proposeRecipe(id, input);
+        // An accepted agent proposal must refresh the visible recipe score now.
+        setReloadKey((key) => key + 1);
+        return { document: out.document };
+      },
+      log(entry) {
+        if (import.meta.env.DEV) {
+          console.info("kitchen-recipe-webmcp", entry.tool, entry.outcome, `${entry.durationMs}ms`, entry.resultCount ?? "");
+        }
+      },
+    };
+    return attachKitchenRecipeWebmcp(host);
+  }, [itemId, boundItemId]);
 
   useEffect(() => {
     document.title = data ? `${data.displayTitle} · Kitchen` : "Kitchen";
@@ -529,6 +705,9 @@ export function KitchenDetail({ itemId, mode }: { itemId: string; mode: "auto" |
         notice={notice}
         tonightButton={tonightButton}
         onCreated={() => setReloadKey((key) => key + 1)}
+        webmcpReady={webmcpReady}
+        generationAllowed={generationAllowed}
+        setGenerationConsent={setGenerationConsent}
       />
     );
   }
@@ -812,11 +991,17 @@ function WatchCook({
   notice,
   tonightButton,
   onCreated,
+  webmcpReady,
+  generationAllowed,
+  setGenerationConsent,
 }: {
   data: KitchenItem;
   notice: string;
   tonightButton: React.ReactNode;
   onCreated: () => void;
+  webmcpReady: boolean;
+  generationAllowed: boolean;
+  setGenerationConsent: (allowed: boolean) => void;
 }) {
   const [preparing, setPreparing] = useState(false);
   const [generationDish, setGenerationDish] = useState<string | null>(null);
@@ -850,7 +1035,17 @@ function WatchCook({
     <section className="kitchen-detail kitchen-watch">
       <DetailHeader data={data} tonightButton={tonightButton}>
         {!data.recipe ? (
-          <MakeCookableActions preparing={preparing} onLocusAi={() => void makeCookable(false)} />
+          <MakeCookableActions
+            preparing={preparing}
+            onLocusAi={() => void makeCookable(false)}
+            webMcpAction={
+              webmcpReady ? (
+                <span className="chip" title="Your browser agent can read this source and propose a recipe draft">
+                  Use my agent
+                </span>
+              ) : null
+            }
+          />
         ) : null}
       </DetailHeader>
       <p className="kitchen-notice" role="status" aria-live="polite">
@@ -862,13 +1057,34 @@ function WatchCook({
           <h2 id="kitchen-generation-title">Generate a suggested recipe for {generationDish}?</h2>
           <p>This will be a new AI-generated recipe inspired by the dish—not the creator’s recipe or a transcription of the video.</p>
           <div>
-            <button type="button" className="btn primary" disabled={preparing} onClick={() => void makeCookable(true)}>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={preparing}
+              onClick={() => {
+                // Human consent here also unlocks generated evidence for a
+                // WebMCP agent proposal on this Item (per-item, this session).
+                setGenerationConsent(true);
+                void makeCookable(true);
+              }}
+            >
               {preparing ? "Generating…" : "Generate suggested recipe"}
             </button>
             <button type="button" className="btn" disabled={preparing} onClick={() => setGenerationDish(null)}>
               Keep source only
             </button>
           </div>
+        </section>
+      ) : null}
+      {webmcpReady ? (
+        <section className="kitchen-agent-consent" aria-label="Agent suggested-recipe consent">
+          <button type="button" className="btn" onClick={() => setGenerationConsent(!generationAllowed)}>
+            {generationAllowed ? "Disallow suggested recipe" : "Allow suggested recipe"}
+          </button>
+          <p>
+            Once allowed, your browser agent may save a suggested recipe for this dish. Suggestions are AI-generated — not
+            the creator’s original recipe.
+          </p>
         </section>
       ) : null}
       {aiError ? (
@@ -1495,7 +1711,7 @@ function RecipeEditor({
     }
     setSaving(unit);
     try {
-      const expectedSourceRevision = await captionRevisionOf(liveItem);
+      const expectedSourceRevision = await captionRevisionOf(normalizeCaption(liveItem.body));
       const { document: saved } = await api.saveRecipe(data.item.id, { expectedSourceRevision, status: "draft", draft: built.draft });
       const savedDraft = normalizeDraft(saved.draft);
       setDoc(saved);
@@ -1615,7 +1831,7 @@ function RecipeEditor({
     }
     setSaving("reviewed");
     try {
-      const expectedSourceRevision = await captionRevisionOf(liveItem);
+      const expectedSourceRevision = await captionRevisionOf(normalizeCaption(liveItem.body));
       await api.saveRecipe(data.item.id, { expectedSourceRevision, status: "reviewed", draft: built });
       onDone();
     } catch (error) {

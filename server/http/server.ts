@@ -73,10 +73,12 @@ import {
 import {
   KitchenConflict,
   addTonight,
+  applyTonightChanges,
   clearTonight,
   getKitchenIndex,
   getKitchenItem,
   getTonight,
+  getTonightView,
   putRecipeDocument,
   removeRecipeDocument,
   removeTonight,
@@ -379,6 +381,24 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     json(res, 200, { removed });
   });
 
+  // Agent proposal path (the visible-route WebMCP adapter submits here). Same
+  // Kitchen module write as the human route, but the trusted session forces
+  // actor "agent": clients cannot choose the actor or status, and the module
+  // forces Draft plus generated-evidence consent.
+  on("POST", "/api/kitchen/items/:id/propose-recipe", async (_req, res, _url, body, params) => {
+    const rec = asRec(body);
+    const allowGenerate = rec.allowGenerate ?? false;
+    if (typeof allowGenerate !== "boolean") throw new RejectedPayload("allowGenerate must be boolean");
+    const input = {
+      expectedSourceRevision: typeof rec.expectedSourceRevision === "string" ? rec.expectedSourceRevision : "",
+      status: "draft",
+      draft: rec.draft,
+      allowGenerate,
+    } as RecipeWriteInput;
+    const document = putRecipeDocument(db, LOCAL_LIBRARY_ID, params.id ?? "", input, "agent", nowIso());
+    json(res, 200, { document });
+  });
+
   on("GET", "/api/kitchen/tonight", async (_req, res) => {
     json(res, 200, getTonight(db, LOCAL_LIBRARY_ID));
   });
@@ -392,6 +412,17 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const entryIds = asRec(body).entryIds;
     if (!Array.isArray(entryIds)) throw new RejectedPayload("entryIds must be an array");
     json(res, 200, reorderTonight(db, LOCAL_LIBRARY_ID, entryIds.map(String), nowIso()));
+  });
+
+  // Exact routes for the Tonight-composition WebMCP adapter. The dispatcher
+  // checks exact matches first, so these never fall through to the :id/remove
+  // matcher below.
+  on("GET", "/api/kitchen/tonight/state", async (_req, res) => {
+    json(res, 200, getTonightView(db, LOCAL_LIBRARY_ID));
+  });
+
+  on("POST", "/api/kitchen/tonight/apply", async (_req, res, _url, body) => {
+    json(res, 200, applyTonightChanges(db, LOCAL_LIBRARY_ID, body, nowIso()));
   });
 
   on("POST", "/api/kitchen/tonight/:id/remove", async (_req, res, _url, _body, params) => {

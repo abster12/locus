@@ -17,12 +17,15 @@ import {
   projectRecipeScore,
   recipeEvidenceKinds,
   validateRecipeDraft,
+  validateTonightChanges,
   type KitchenAvailability,
   type RecipeActor,
   type RecipeDraftV1,
   type RecipeScore,
   type RecipeStatus,
   type RecipeWriteInput,
+  type TonightChangesInput,
+  type TonightOp,
 } from "./policy.ts";
 
 export { LOCAL_LIBRARY_ID } from "../reading/policy.ts";
@@ -36,6 +39,7 @@ export {
   normalizeCaption,
   projectRecipeScore,
   validateRecipeDraft,
+  validateTonightChanges,
   watchEmbedUrl,
 } from "./policy.ts";
 export type {
@@ -49,6 +53,8 @@ export type {
   RecipeStatus,
   RecipeStepV1,
   RecipeWriteInput,
+  TonightChangesInput,
+  TonightOp,
 } from "./policy.ts";
 
 export class KitchenConflict extends Error {
@@ -108,6 +114,13 @@ export type TonightEntry = {
   createdAt: string;
   item: KitchenItem | null;
 };
+
+export type TonightView = {
+  revision: number;
+  entries: TonightEntry[];
+};
+
+export type TonightMutationResult = TonightView & { replayed: boolean };
 
 type RecipeRow = {
   id: string;
@@ -194,6 +207,9 @@ export function putRecipeDocument(
     const status: RecipeStatus = actor === "agent" ? "draft" : input.status;
     if (status !== "draft" && status !== "reviewed") throw new RejectedPayload("invalid recipe status");
     const draft = validateRecipeDraft(input.draft, sourceCaption, actor);
+    if (actor === "agent" && recipeEvidenceKinds(draft).has("generated") && !input.allowGenerate) {
+      throw new RejectedPayload("generation requires explicit consent");
+    }
     const existing = loadRecipeRow(db, libraryId, itemId);
     const id = existing?.id ?? newId();
     const createdAt = existing?.created_at ?? now;
@@ -245,6 +261,7 @@ export function addTonight(db: Db, libraryId: string, itemId: string, now: strin
       `INSERT INTO kitchen_tonight_entries (id, library_id, item_id, position, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(id, libraryId, itemId, count, now, now);
+    bumpTonightRevision(db, libraryId);
     return hydrateTonight(db, libraryId, { id, item_id: itemId, position: count, created_at: now });
   });
 }
@@ -268,6 +285,7 @@ export function reorderTonight(db: Db, libraryId: string, orderedEntryIds: strin
       `UPDATE kitchen_tonight_entries SET position = ?, updated_at = ? WHERE library_id = ? AND id = ?`,
     );
     orderedEntryIds.forEach((id, index) => update.run(index, now, libraryId, id));
+    bumpTonightRevision(db, libraryId);
     return getTonight(db, libraryId);
   });
 }
@@ -280,13 +298,83 @@ export function removeTonight(db: Db, libraryId: string, entryId: string): boole
     if (!row) return false;
     db.prepare(`DELETE FROM kitchen_tonight_entries WHERE library_id = ? AND id = ?`).run(libraryId, entryId);
     densifyTonight(db, libraryId);
+    bumpTonightRevision(db, libraryId);
     return true;
   });
 }
 
 export function clearTonight(db: Db, libraryId: string): number {
-  const result = db.prepare(`DELETE FROM kitchen_tonight_entries WHERE library_id = ?`).run(libraryId);
-  return Number(result.changes ?? 0);
+  return tx(db, () => {
+    const result = db.prepare(`DELETE FROM kitchen_tonight_entries WHERE library_id = ?`).run(libraryId);
+    const removed = Number(result.changes ?? 0);
+    if (removed > 0) bumpTonightRevision(db, libraryId);
+    return removed;
+  });
+}
+
+export function getTonightView(db: Db, libraryId: string): TonightView {
+  return { revision: tonightRevision(db, libraryId), entries: getTonight(db, libraryId) };
+}
+
+export function applyTonightChanges(db: Db, libraryId: string, input: unknown, now: string): TonightMutationResult {
+  const parsed = validateTonightChanges(input);
+  const hash = tonightPayloadHash(parsed);
+  return tx(db, () => {
+    const existing = db
+      .prepare(
+        `SELECT payload_hash, result_json FROM kitchen_tonight_mutations
+          WHERE library_id = ? AND client_mutation_id = ?`,
+      )
+      .get(libraryId, parsed.clientMutationId) as { payload_hash: string; result_json: string } | undefined;
+    if (existing) {
+      if (existing.payload_hash !== hash) throw new KitchenConflict("clientMutationId was already used for a different change");
+      return { ...(JSON.parse(existing.result_json) as TonightView), replayed: true };
+    }
+    if (parsed.expectedRevision !== tonightRevision(db, libraryId)) throw new KitchenConflict("Tonight revision is stale");
+    const rows = db
+      .prepare(
+        `SELECT id, item_id, position, created_at FROM kitchen_tonight_entries
+          WHERE library_id = ? ORDER BY position ASC, id ASC`,
+      )
+      .all(libraryId) as TonightRow[];
+    let working = rows.map((row) => ({ id: row.id, itemId: row.item_id, createdAt: row.created_at }));
+    for (const op of parsed.operations) {
+      if (op.op === "add") {
+        if (working.some((entry) => entry.itemId === op.itemId)) throw new KitchenConflict("duplicate Tonight item");
+        const item = getItem(db, op.itemId);
+        if (!item) throw new MissingResource("item");
+        if (!itemMatchesFilter(db, op.itemId, FOOD_FILTER)) throw new KitchenConflict("item is not eligible for Tonight");
+        if (working.length >= MAX_TONIGHT_ENTRIES) throw new KitchenConflict("Tonight is full");
+        working = [...working, { id: newId(), itemId: op.itemId, createdAt: now }];
+      } else if (op.op === "remove") {
+        const next = working.filter((entry) => entry.itemId !== op.itemId);
+        if (next.length === working.length) throw new RejectedPayload("Tonight entry not found");
+        working = next;
+      } else {
+        if (op.itemIds.length !== working.length) throw new KitchenConflict("Tonight order is stale");
+        const byItem = new Map(working.map((entry) => [entry.itemId, entry]));
+        working = op.itemIds.map((itemId) => {
+          const entry = byItem.get(itemId);
+          if (!entry) throw new KitchenConflict("Tonight order is stale");
+          return entry;
+        });
+      }
+    }
+    db.prepare(`DELETE FROM kitchen_tonight_entries WHERE library_id = ?`).run(libraryId);
+    const insert = db.prepare(
+      `INSERT INTO kitchen_tonight_entries (id, library_id, item_id, position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    working.forEach((entry, index) => insert.run(entry.id, libraryId, entry.itemId, index, entry.createdAt, now));
+    const revision = bumpTonightRevision(db, libraryId);
+    const view: TonightView = { revision, entries: getTonight(db, libraryId) };
+    db.prepare(
+      `INSERT INTO kitchen_tonight_mutations (
+         library_id, client_mutation_id, payload_hash, result_json, result_revision, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(libraryId, parsed.clientMutationId, hash, JSON.stringify(view), revision, now);
+    return { ...view, replayed: false };
+  });
 }
 
 export type KitchenArchiveRecord = Record<string, unknown>;
@@ -529,6 +617,30 @@ function tonightHasItem(db: Db, libraryId: string, itemId: string): boolean {
 function tonightCount(db: Db, libraryId: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS n FROM kitchen_tonight_entries WHERE library_id = ?`).get(libraryId) as { n: number };
   return Number(row?.n ?? 0);
+}
+
+function tonightRevision(db: Db, libraryId: string): number {
+  const row = db.prepare(`SELECT revision FROM kitchen_tonight_state WHERE library_id = ?`).get(libraryId) as { revision: number } | undefined;
+  return row?.revision ?? 1;
+}
+
+function bumpTonightRevision(db: Db, libraryId: string): number {
+  const next = tonightRevision(db, libraryId) + 1;
+  db.prepare(
+    `INSERT INTO kitchen_tonight_state (library_id, revision) VALUES (?, ?)
+     ON CONFLICT(library_id) DO UPDATE SET revision = excluded.revision`,
+  ).run(libraryId, next);
+  return next;
+}
+
+function tonightPayloadHash(input: TonightChangesInput): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      expectedRevision: input.expectedRevision,
+      instruction: input.instruction,
+      operations: input.operations,
+    }))
+    .digest("hex");
 }
 
 function recipeDocumentCount(db: Db, libraryId: string): number {

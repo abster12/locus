@@ -493,6 +493,8 @@ export function wipeLibrary(db: Db): void {
     "atlas_screenings",
     "atlas_assignments",
     "atlas_places",
+    "kitchen_tonight_mutations",
+    "kitchen_tonight_state",
     "kitchen_tonight_entries",
     "kitchen_recipe_documents",
     "link_previews",

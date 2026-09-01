@@ -142,7 +142,7 @@ export async function makeCookable(
     db,
     libraryId,
     itemId,
-    { expectedSourceRevision: revision, status: "draft", draft },
+    { expectedSourceRevision: revision, status: "draft", draft, allowGenerate },
     "agent",
     now,
   );

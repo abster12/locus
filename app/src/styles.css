@@ -949,6 +949,8 @@ html[data-theme="dark"] .stage-wv { background: #111; }
 .kitchen-generation > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .kitchen-ai-error { max-width: 620px; margin: 0 0 22px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--rule)); border-radius: 8px; }
 .kitchen-ai-error p { margin: 0 0 10px; font-size: 13px; }
+.kitchen-agent-consent { max-width: 620px; margin: 0 0 22px; }
+.kitchen-agent-consent p { margin: 6px 0 0; color: var(--mute); font-size: 12px; line-height: 1.5; max-width: 58ch; }
 .kitchen-provenance { margin: 0 0 15px; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--mute); }
 .kitchen-provenance-generated { color: var(--warn); }
 

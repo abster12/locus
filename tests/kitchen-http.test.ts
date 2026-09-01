@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../db/open.ts";
 import { addTag } from "../core/commands.ts";
-import { captionRevision, normalizeCaption, type KitchenItem, type TonightEntry } from "../server/kitchen/module.ts";
+import { captionRevision, normalizeCaption, type KitchenItem, type TonightEntry, type TonightMutationResult, type TonightView } from "../server/kitchen/module.ts";
 
 process.env.LOCUS_NO_VITE = "1";
 process.env.LOCUS_PORT = "8793";
@@ -259,6 +259,164 @@ test("kitchen routes reject unauthenticated requests", async () => {
       body: JSON.stringify({ itemId: "food-1" }),
     });
     assert.equal(anonymousPost.status, 401);
+  } finally {
+    await app.close();
+    database.close();
+  }
+});
+
+test("agent propose-recipe and tonight apply over HTTP", async () => {
+  const database = mem();
+  insertItem(database, "food-1", "200 g paneer\nGrill it");
+  insertItem(database, "food-2", "beans");
+  insertItem(database, "plain-1", "not food");
+  food(database, "food-1");
+  food(database, "food-2");
+  const app = await start(database);
+  try {
+    const revision = captionRevision(normalizeCaption("200 g paneer\nGrill it"));
+    const captionDraft = {
+      version: 1,
+      ingredients: [
+        { id: "ing-1", raw: "200 g paneer", name: "paneer", evidence: { kind: "caption", spans: [{ start: 0, end: 12, text: "200 g paneer" }] } },
+      ],
+      steps: [],
+    };
+    const generatedDraft = {
+      version: 1,
+      ingredients: [{ id: "ing-1", raw: "salt", name: "salt", evidence: { kind: "generated" } }],
+      steps: [],
+    };
+
+    // Client-sent status and actor are ignored: the trusted session forces
+    // actor "agent" and the module forces Draft.
+    const proposed = await app.post("/api/kitchen/items/food-1/propose-recipe", {
+      expectedSourceRevision: revision,
+      status: "reviewed",
+      actor: "user",
+      draft: captionDraft,
+    });
+    assert.equal(proposed.status, 200);
+    const doc = (await proposed.json()) as { document: { status: string; updatedBy: string; provenance: string } };
+    assert.equal(doc.document.status, "draft");
+    assert.equal(doc.document.updatedBy, "agent");
+    assert.equal(doc.document.provenance, "caption");
+
+    // allowGenerate must be boolean when present.
+    const badFlag = await app.post("/api/kitchen/items/food-2/propose-recipe", {
+      expectedSourceRevision: captionRevision(normalizeCaption("beans")),
+      draft: captionDraft,
+      allowGenerate: "yes",
+    });
+    assert.equal(badFlag.status, 400);
+
+    // Generated evidence without consent rejects the write and stores nothing.
+    const unconsented = await app.post("/api/kitchen/items/food-2/propose-recipe", {
+      expectedSourceRevision: captionRevision(normalizeCaption("beans")),
+      draft: generatedDraft,
+    });
+    assert.equal(unconsented.status, 400);
+    assert.equal(((await (await app.get("/api/kitchen/items/food-2")).json()) as KitchenItem).recipe, null);
+
+    // With explicit consent the suggestion stores as a labelled generated draft.
+    const consented = await app.post("/api/kitchen/items/food-2/propose-recipe", {
+      expectedSourceRevision: captionRevision(normalizeCaption("beans")),
+      draft: generatedDraft,
+      allowGenerate: true,
+    });
+    assert.equal(consented.status, 200);
+    const genDoc = (await consented.json()) as { document: { status: string; provenance: string } };
+    assert.equal(genDoc.document.status, "draft");
+    assert.equal(genDoc.document.provenance, "generated");
+
+    const stale = await app.post("/api/kitchen/items/food-1/propose-recipe", { expectedSourceRevision: "deadbeef", draft: captionDraft });
+    assert.equal(stale.status, 409);
+    assert.equal((await app.post("/api/kitchen/items/missing/propose-recipe", { expectedSourceRevision: revision, draft: captionDraft })).status, 404);
+
+    // Unauthenticated agent routes behave like every other kitchen route.
+    const anonymous = await fetch(`${app.base}/api/kitchen/items/food-1/propose-recipe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedSourceRevision: revision, draft: captionDraft }),
+    });
+    assert.equal(anonymous.status, 401);
+
+    // The human route keeps returning the plain array; the agent route adds revision.
+    assert.deepEqual((await (await app.get("/api/kitchen/tonight")).json()) as TonightEntry[], []);
+    const state = (await (await app.get("/api/kitchen/tonight/state")).json()) as TonightView;
+    assert.equal(state.revision, 1);
+
+    // One apply commits add+reorder atomically against the expected revision.
+    const first = await app.post("/api/kitchen/tonight/apply", {
+      expectedRevision: 1,
+      clientMutationId: "webmcp-1",
+      operations: [{ op: "add", itemId: "food-1" }, { op: "add", itemId: "food-2" }],
+    });
+    assert.equal(first.status, 200);
+    const applied = (await first.json()) as TonightMutationResult;
+    assert.equal(applied.replayed, false);
+    assert.equal(applied.revision, 2);
+    assert.deepEqual(applied.entries.map((entry) => entry.itemId), ["food-1", "food-2"]);
+
+    const reorder = await app.post("/api/kitchen/tonight/apply", {
+      expectedRevision: 2,
+      clientMutationId: "webmcp-2",
+      operations: [{ op: "reorder", itemIds: ["food-2", "food-1"] }],
+    });
+    assert.equal(reorder.status, 200);
+    assert.deepEqual(((await reorder.json()) as TonightMutationResult).entries.map((entry) => entry.itemId), ["food-2", "food-1"]);
+
+    // Retrying the same clientMutationId replays without duplicating entries.
+    const replay = await app.post("/api/kitchen/tonight/apply", {
+      expectedRevision: 1,
+      clientMutationId: "webmcp-1",
+      operations: [{ op: "add", itemId: "food-1" }, { op: "add", itemId: "food-2" }],
+    });
+    assert.equal(replay.status, 200);
+    const replayed = (await replay.json()) as TonightMutationResult;
+    assert.equal(replayed.replayed, true);
+    assert.equal(replayed.revision, 2);
+    assert.equal(((await (await app.get("/api/kitchen/tonight")).json()) as TonightEntry[]).length, 2);
+
+    // The same id with a different payload is a conflict, never a second write.
+    assert.equal(
+      (await app.post("/api/kitchen/tonight/apply", {
+        expectedRevision: 3,
+        clientMutationId: "webmcp-1",
+        operations: [{ op: "add", itemId: "food-1" }, { op: "add", itemId: "food-2" }],
+      })).status,
+      409,
+    );
+
+    // Stale revisions and missing CSRF both reject without mutating.
+    assert.equal(
+      (await app.post("/api/kitchen/tonight/apply", {
+        expectedRevision: 1,
+        clientMutationId: "webmcp-stale",
+        operations: [{ op: "remove", itemId: "food-1" }],
+      })).status,
+      409,
+    );
+    const noCsrf = await fetch(`${app.base}/api/kitchen/tonight/apply`, {
+      method: "POST",
+      headers: { cookie: app.headers.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ expectedRevision: 3, clientMutationId: "webmcp-csrf", operations: [{ op: "remove", itemId: "food-1" }] }),
+    });
+    assert.equal(noCsrf.status, 403);
+    assert.deepEqual(((await (await app.get("/api/kitchen/tonight")).json()) as TonightEntry[]).map((entry) => entry.itemId), ["food-2", "food-1"]);
+
+    // Composition never touches Recipe Documents.
+    const before = ((await (await app.get("/api/kitchen/items/food-1")).json()) as KitchenItem).recipe as { status: string; sourceRevision: string };
+    assert.equal(before.status, "draft");
+    const removed = await app.post("/api/kitchen/tonight/apply", {
+      expectedRevision: 3,
+      clientMutationId: "webmcp-3",
+      operations: [{ op: "remove", itemId: "food-1" }],
+    });
+    assert.equal(removed.status, 200);
+    const after = ((await (await app.get("/api/kitchen/items/food-1")).json()) as KitchenItem).recipe as { status: string; sourceRevision: string };
+    assert.equal(after.status, before.status);
+    assert.equal(after.sourceRevision, before.sourceRevision);
   } finally {
     await app.close();
     database.close();

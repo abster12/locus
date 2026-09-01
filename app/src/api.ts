@@ -380,6 +380,22 @@ export const api = {
   removeTonight: (entryId: string) =>
     req<{ removed: boolean }>(`/api/kitchen/tonight/${encodeURIComponent(entryId)}/remove`, { method: "POST", body: "{}" }),
   clearTonight: () => req<{ removed: number }>("/api/kitchen/tonight/clear", { method: "POST", body: "{}" }),
+  // Agent-proposal paths for the visible-route WebMCP adapter. The server
+  // always applies actor "agent"; callers never send an actor field.
+  proposeRecipe: (id: string, body: { expectedSourceRevision: string; draft: unknown; allowGenerate?: boolean }) =>
+    req<{ document: RecipeDocument }>(`/api/kitchen/items/${encodeURIComponent(id)}/propose-recipe`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  tonightState: () => req<TonightState>("/api/kitchen/tonight/state"),
+  // Caller owns clientMutationId for one logical composition. Retries of an
+  // unchanged payload reuse that id; a changed payload must get a fresh one.
+  applyTonightChanges: (body: {
+    expectedRevision: number;
+    clientMutationId: string;
+    instruction?: string | null;
+    operations: Array<{ op: "add"; itemId: string } | { op: "remove"; itemId: string } | { op: "reorder"; itemIds: string[] }>;
+  }) => req<TonightMutationResult>("/api/kitchen/tonight/apply", { method: "POST", body: JSON.stringify(body) }),
   trips: (signal?: AbortSignal) => req<{ trips: TripSummary[] }>("/api/trips", { signal }),
   trip: (id: string, signal?: AbortSignal) => req<{ trip: TripDocument }>(`/api/trips/${encodeURIComponent(id)}`, { signal }),
   // Caller owns clientMutationId for one logical create. Retries of an
@@ -670,6 +686,15 @@ export interface TonightEntry {
   order: number;
   createdAt: string;
   item: KitchenItem | null;
+}
+
+export interface TonightState {
+  revision: number;
+  entries: TonightEntry[];
+}
+
+export interface TonightMutationResult extends TonightState {
+  replayed: boolean;
 }
 
 export interface KitchenIndex {
