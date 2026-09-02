@@ -1,0 +1,6 @@
+BETTER_AUTH_SECRET="replace-with-at-least-32-random-characters"
+CSRF_SECRET="replace-with-a-different-at-least-32-random-characters"
+GOOGLE_CLIENT_ID="replace-with-google-oauth-client-id"
+GOOGLE_CLIENT_SECRET="replace-with-google-oauth-client-secret"
+# Registration mode is a Worker var (wrangler.jsonc REGISTRATION_MODE), not a secret.
+# Keep open through 2026-09-21 5:00 pm PDT unless an alternative judge-access path exists.

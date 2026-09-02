@@ -1,0 +1,83 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "locus-identity",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../dist/hosted-app",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "locus-identity",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "BETTER_AUTH_URL": "http://localhost:8791",
+    // Submitted challenge env stays open and free through 2026-09-21 17:00 PDT.
+    // Close only for a genuine safety incident, and only with an alternative judge-access path.
+    "REGISTRATION_MODE": "open"
+  },
+  "secrets": {
+    "required": ["BETTER_AUTH_SECRET", "CSRF_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]
+  },
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "11003001",
+      "simple": { "limit": 20, "period": 60 }
+    },
+    {
+      "name": "REJECTED_SESSION_RATE_LIMITER",
+      "namespace_id": "11003002",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
+  "env": {
+    "staging": {
+      "workers_dev": true,
+      "preview_urls": false,
+      "vars": {
+        "BETTER_AUTH_URL": "https://locus-identity-staging.abhigyan0987.workers.dev",
+        // Submitted challenge env stays open and free through 2026-09-21 17:00 PDT.
+        "REGISTRATION_MODE": "open"
+      },
+      "secrets": {
+        "required": ["BETTER_AUTH_SECRET", "CSRF_SECRET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "locus-identity-staging",
+          "database_id": "f6f96094-57cf-4fb3-b751-9e7d1db1c861",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "AUTH_RATE_LIMITER",
+          "namespace_id": "11003001",
+          "simple": { "limit": 20, "period": 60 }
+        },
+        {
+          "name": "REJECTED_SESSION_RATE_LIMITER",
+          "namespace_id": "11003002",
+          "simple": { "limit": 30, "period": 60 }
+        }
+      ],
+      "observability": {
+        "enabled": true,
+        // Keep structured application logs, but do not persist Cloudflare's raw
+        // invocation URL/header envelope because OAuth callbacks contain codes.
+        "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+        "traces": { "enabled": false }
+      }
+    }
+  }
+}

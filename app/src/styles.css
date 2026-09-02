@@ -654,6 +654,14 @@ textarea:focus { outline: none; border-color: var(--ink); }
 .bad { color: var(--bad); }
 
 .summary { display: grid; gap: 16px; }
+.hosted-session .btn { min-height: 44px; }
+.account-avatar {
+  width: 64px; height: 64px; border-radius: 999px; object-fit: cover;
+  background: var(--wash); color: var(--ink);
+  display: grid; place-items: center;
+  font-family: var(--display); font-size: 28px; line-height: 1;
+  margin: 0 0 12px;
+}
 .block { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; box-shadow: var(--lift); }
 .block h2 { font-family: var(--display); font-size: 24px; margin: 0 0 10px; }
 .block ul { margin: 0; padding-left: 18px; }

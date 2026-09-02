@@ -1,0 +1,25 @@
+{
+  "name": "locus-hosted",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build:app && wrangler d1 migrations apply locus-identity --local && wrangler dev --port 8791",
+    "build:app": "npm run build:hosted --prefix ..",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run build:app && wrangler types && tsc --noEmit && wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "check:staging": "npm run build:app && npm test && wrangler types --env staging && tsc --noEmit && wrangler deploy --dry-run --env staging --outdir .wrangler/dry-run-staging",
+    "migrations:list:staging": "wrangler d1 migrations list locus-identity-staging --remote --env staging",
+    "migrations:apply:staging": "wrangler d1 migrations apply locus-identity-staging --remote --env staging",
+    "deploy:staging": "npm run build:app && wrangler deploy --env staging",
+    "tail:staging": "wrangler tail --env staging"
+  },
+  "dependencies": {
+    "better-auth": "1.7.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "wrangler": "4.127.1"
+  }
+}
