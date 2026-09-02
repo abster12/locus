@@ -60,6 +60,7 @@ test("trips browser: add from Library, inspect details, and broken references st
       if (!button) throw new Error("no item result");
       button.click();
     });
+    await page.waitForSelector(".trip-search-picked", { timeout: 5000 });
     await page.click(".trip-add-dialog button[type='submit']");
     await page.waitForFunction(() => document.querySelector(".trip-day:not(.trip-unscheduled) .trip-stop-title")?.textContent === "Nishiki snack walk", { timeout: 5000 });
     const kinds = await page.$$eval(".trip-day:not(.trip-unscheduled) .trip-stop-kind", (els) => els.map((el) => el.textContent ?? ""));

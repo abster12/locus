@@ -32,7 +32,7 @@ import {
   type TripMutationResult,
   type TripSetupInput,
 } from "../server/trips/module.ts";
-import { createPlace } from "../server/atlas/module.ts";
+import { createPlace, markNotAtlas, setExactPlace } from "../server/atlas/module.ts";
 
 
 /** Existing test stops are outside content; reference stops resolve server-side. */
@@ -1085,6 +1085,24 @@ test("trip source search returns bounded selection fields and is Library-scoped 
   assert.ok(everything.items.length <= 20 && everything.places.length <= 20, "results are bounded");
   const junk = searchTripSources(db, "local", "zzzz-nothing-matches");
   assert.deepEqual(junk, { items: [], places: [] });
+});
+
+test("trip source search returns Atlas items, not not_atlas reading material", () => {
+  const { db } = plannerTrip();
+  seedItem(db, "z-reading", "WAL blog", "Everyone should know how WALs work in Barcelona", "https://x.com/a/status/read");
+  seedItem(db, "taco-1", "TKO Tacos", "Found your next taco spot", "https://instagram.com/p/taco");
+  markNotAtlas(db, "local", "z-reading", 0);
+  const city = createPlace(db, "local", { name: "Barcelona", kind: "city" });
+  const venue = createPlace(db, "local", { name: "TKO Tacos", kind: "venue", parentId: city.id });
+  setExactPlace(db, "local", "taco-1", { placeId: venue.id }, 0);
+
+  const byCity = searchTripSources(db, "local", "Barcelona");
+  assert.deepEqual(byCity.items.map((item) => item.id), ["taco-1"]);
+  assert.equal(byCity.items[0]!.title, "TKO Tacos");
+  assert.ok(byCity.places.some((place) => place.name === "Barcelona"));
+
+  const empty = searchTripSources(db, "local", "");
+  assert.deepEqual(empty.items.map((item) => item.id), ["taco-1"]);
 });
 
 // ---------- Drafts, holes, and recommendations (ticket 07) ----------

@@ -1597,6 +1597,20 @@ html[data-theme="dark"] .stage-wv { background: #111; }
 }
 .trip-add-choice:hover { border-color: var(--ink); }
 .trip-search-result[aria-pressed="true"] { border: 1px solid var(--accent); background: var(--wash); }
+.trip-search-picked {
+  display: flex; align-items: flex-start; gap: 8px;
+  border: 1px solid var(--accent); background: var(--wash);
+  border-radius: 8px; padding: 8px 8px 8px 10px;
+}
+.trip-search-picked p { margin: 0; flex: 1; min-width: 0; display: grid; gap: 2px; }
+.trip-search-picked .trip-search-title {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.trip-search-clear {
+  flex: none; min-width: 40px; min-height: 40px; margin: -4px -4px 0 0;
+  border: 0; background: transparent; padding: 0;
+  color: var(--mute); font-family: var(--display); font-size: 22px; line-height: 1;
+}
 .trip-add-dialog .trip-form-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .trip-add-dialog .trip-search-group ul { margin: 0; }
 @media (max-width: 899px) {
