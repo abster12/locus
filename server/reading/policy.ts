@@ -1,6 +1,6 @@
 import { isPlatformPermalink, youtubeVideoId } from "../../core/sanitize.ts";
 
-export const LOCAL_LIBRARY_ID = "local";
+export { LOCAL_LIBRARY_ID } from "../../db/library-id.ts";
 export const CANDIDATE_LIMIT = 20;
 const MAX_URL = 2_000;
 

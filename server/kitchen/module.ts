@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Db } from "../../db/open.ts";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import { newId, tx } from "../../db/open.ts";
 import { MissingResource } from "../../core/commands.ts";
 import { getItem, itemMatchesFilter, listItemsPage, listMatchingSources, type ItemCard } from "../../core/library.ts";
@@ -153,6 +154,7 @@ export function getKitchenIndex(db: Db, libraryId: string, query: KitchenQuery =
   counts: { foodSaves: number; structuredRecipes: number; tonight: number };
   sources: string[];
 } {
+  libraryId = ownedLibraryId(libraryId);
   const q = boundSearch(query.q);
   const page = listItemsPage(
     db,

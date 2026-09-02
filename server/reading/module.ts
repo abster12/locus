@@ -1,4 +1,5 @@
 import type { Db } from "../../db/open.ts";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import { newId, nowIso } from "../../db/open.ts";
 import { getSetting, MissingResource, setSetting } from "../../core/commands.ts";
 import { getItem } from "../../core/library.ts";
@@ -408,6 +409,7 @@ export function reconcileItem(db: Db, libraryId: string, itemId: string): void {
 
 /** One bounded local batch. Returns true when more Items remain. */
 export function backfillReading(db: Db, libraryId = LOCAL_LIBRARY_ID): boolean {
+  libraryId = ownedLibraryId(libraryId);
   let cursor = getSetting(db, BACKFILL_CURSOR) ?? "";
   if (cursor === BACKFILL_DONE) return false;
   const rows = (
@@ -567,6 +569,7 @@ export function importReadingRecords(
   input: ReadingArchiveImport,
   libraryId = LOCAL_LIBRARY_ID,
 ): { documents: number; provenance: number; progress: number } {
+  libraryId = ownedLibraryId(libraryId);
   const documents = [...input.documents];
   const provenance = [...input.provenance];
   const progress = [...input.progress];

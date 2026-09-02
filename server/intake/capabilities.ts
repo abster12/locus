@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import type { Db } from "../../db/open.ts";
 import { newId, nowIso } from "../../db/open.ts";
 import { RejectedPayload, sanitizeText } from "../../core/sanitize.ts";
@@ -45,7 +46,7 @@ export function issueLibraryCapability(
 }
 
 export function listLibraryCapabilities(db: Db, libraryId: string): LibraryCapability[] {
-  requireLibraryId(libraryId);
+  libraryId = requireLibraryId(libraryId);
   return (
     db
       .prepare(
@@ -59,7 +60,7 @@ export function listLibraryCapabilities(db: Db, libraryId: string): LibraryCapab
 }
 
 export function revokeLibraryCapability(db: Db, libraryId: string, id: string): boolean {
-  requireLibraryId(libraryId);
+  libraryId = requireLibraryId(libraryId);
   if (!id.trim()) return false;
   const result = db
     .prepare(
@@ -87,5 +88,5 @@ function hashSecret(token: string): string {
 
 function requireLibraryId(libraryId: string): string {
   if (typeof libraryId !== "string" || !libraryId.trim()) throw new RejectedPayload("library is required");
-  return libraryId;
+  return ownedLibraryId(libraryId);
 }

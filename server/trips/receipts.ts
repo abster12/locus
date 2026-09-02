@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import type { Db } from "../../db/open.ts";
 import { nowIso, tx } from "../../db/open.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
@@ -54,6 +55,7 @@ export function withCreateMutation<T>(
     apply: (at: string) => { result: T; tripId: string; resultRevision: number; receipt?: unknown };
   },
 ): T {
+  libraryId = ownedLibraryId(libraryId);
   const at = spec.at ?? nowIso();
   const hash = mutationPayloadHash(spec.kind, null, spec.payload);
   const legacyHash = legacyMutationPayloadHash(spec.kind, null, spec.payload);
@@ -93,6 +95,7 @@ export function runTripMutation<T, R extends { id: string; revision: number }>(
     apply: (tripRow: R, at: string, bump: () => void) => { result: T; receipt?: unknown };
   },
 ): T | null {
+  libraryId = ownedLibraryId(libraryId);
   const fields = validateMutationFields(spec.input, "lifecycle");
   const at = spec.at ?? nowIso();
   const hash = mutationPayloadHash(spec.kind, fields.expectedRevision, spec.payload ?? null, tripId);

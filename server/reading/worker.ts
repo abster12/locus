@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { Db } from "../../db/open.ts";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import { newId, nowIso, readingAssetsRoot, tx } from "../../db/open.ts";
 import { MissingResource } from "../../core/commands.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
@@ -808,6 +809,7 @@ function safeAssetPath(libraryId: string, documentId: string): string | null {
 }
 
 export function saveAsset(db: Db, libraryId: string, documentId: string, bytes: Buffer, mime: string): string {
+  libraryId = ownedLibraryId(libraryId);
   const hash = createHash("sha256").update(bytes).digest("hex");
   const existing = db
     .prepare(`SELECT id FROM reading_assets WHERE library_id = ? AND document_id = ? AND content_hash = ?`)
@@ -832,6 +834,7 @@ export function openReadingAsset(
   documentId: string,
   assetId: string,
 ): { path: string; mime: string } | null {
+  libraryId = ownedLibraryId(libraryId);
   const row = db
     .prepare(
       `SELECT adapter_key, mime FROM reading_assets WHERE id = ? AND library_id = ? AND document_id = ?`,

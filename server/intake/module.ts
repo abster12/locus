@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { LOCAL_LIBRARY_ID, ownedLibraryId } from "../../db/library-id.ts";
 import type { Db } from "../../db/open.ts";
 import { nowIso, tx } from "../../db/open.ts";
 import { ensureTag } from "../../core/commands.ts";
@@ -148,7 +149,7 @@ const MAX_RATIONALE = 280;
 const MAX_EVIDENCE = 4;
 const OBSERVED_FIELDS = ["title", "body", "authorName", "publishedAt", "media"] as const;
 const EVIDENCE_FIELDS = new Set(["title", "body", "authorName", "url", "instruction"]);
-const LOCAL_ITEM_LIBRARY_ID = "local";
+
 const MUTATION_REUSE_ERROR = "clientMutationId was already used for a different change";
 
 export function getIntakeContext(db: Db, trusted: { libraryId: string }): IntakeContext {
@@ -181,11 +182,11 @@ export function searchLibrary(
   const url = optionalBounded(rec.url, "url", MAX_URL);
   const q = optionalBounded(rec.q, "q", MAX_SEARCH_Q);
   if (!url && !q) return { items: [] };
-  if (trusted.libraryId !== LOCAL_ITEM_LIBRARY_ID) return { items: [] };
+  const libraryId = requireLibrary(trusted.libraryId);
   const items: LibrarySearchHit[] = [];
   const seen = new Set<string>();
   if (url) {
-    const match = findExistingItemId(db, sanitizeUrl(url));
+    const match = findExistingItemId(db, libraryId, sanitizeUrl(url));
     if (match) {
       const hit = searchHit(db, match);
       if (hit) {
@@ -202,11 +203,11 @@ export function searchLibrary(
           (SELECT a.source FROM source_records r JOIN source_accounts a ON a.id = r.source_account_id
            WHERE r.item_id = i.id LIMIT 1) AS source
          FROM items i
-         WHERE i.title LIKE ? ESCAPE '\\' OR i.url LIKE ? ESCAPE '\\'
+         WHERE i.library_id = ? AND (i.title LIKE ? ESCAPE '\\' OR i.url LIKE ? ESCAPE '\\')
          ORDER BY i.first_observed_at DESC, i.id
          LIMIT ?`,
       )
-      .all(needle, needle, MAX_PRESENT_DRAFTS) as {
+      .all(libraryId, needle, needle, MAX_PRESENT_DRAFTS) as {
         id: string;
         title: string | null;
         url: string;
@@ -333,10 +334,11 @@ export function getIntakeProvenance(db: Db, itemId: string): IntakeProvenance {
 
 export type IntakeArchiveRecord = Record<string, unknown>;
 
-export function exportIntakeRecords(db: Db, libraryId = "local"): {
+export function exportIntakeRecords(db: Db, libraryId = LOCAL_LIBRARY_ID): {
   counts: { itemIntake: number };
   records: IntakeArchiveRecord[];
 } {
+  libraryId = ownedLibraryId(libraryId);
   const intakeRows = db
     .prepare(
       `SELECT item_id, actor, created_at, observed_json FROM item_intake WHERE library_id = ? ORDER BY item_id`,
@@ -386,7 +388,7 @@ export function importIntakeRecords(
     libraryId?: string;
   },
 ): void {
-  const libraryId = input.libraryId ?? "local";
+  const libraryId = ownedLibraryId(input.libraryId ?? "local");
   const seen = new Set<string>();
   const insIntake = db.prepare(
     `INSERT INTO item_intake (item_id, library_id, actor, created_at, observed_json) VALUES (?, ?, ?, ?, ?)`,
@@ -437,7 +439,7 @@ function commitDrafts(
   if (trusted.actor !== "user" && trusted.actor !== "agent") {
     throw new RejectedPayload("actor must be user or agent");
   }
-  requireLibrary(trusted.libraryId);
+  trusted = { ...trusted, libraryId: requireLibrary(trusted.libraryId) };
   if (batch.drafts.length === 0) throw new RejectedPayload("drafts required");
   if (batch.drafts.length > MAX_INTAKE_BATCH) throw new RejectedPayload(`drafts exceeds ${MAX_INTAKE_BATCH}`);
   return tx(db, () => {
@@ -504,7 +506,7 @@ function writeDraft(
 ): IntakeCommitResult {
   if (trusted.actor === "agent") assertObservedFields(entry.draft, entry.observedFields);
   const org = resolveOrg(db, entry.rec, true);
-  const existingId = findExistingItemId(db, entry.draft.url);
+  const existingId = findExistingItemId(db, trusted.libraryId, entry.draft.url);
   let itemId: string;
   let outcome: "created" | "reused";
   if (existingId) {
@@ -569,7 +571,7 @@ function searchHit(db: Db, id: string): LibrarySearchHit | undefined {
 
 function presentOne(db: Db, input: unknown, now: string): PresentedIntakeDraft {
   const rec = record(input, ALLOWED_PRESENT_DRAFT_FIELDS);
-  const { draft } = parseSource({ libraryId: LOCAL_ITEM_LIBRARY_ID, actor: "agent" }, {
+  const { draft } = parseSource({ libraryId: LOCAL_LIBRARY_ID, actor: "agent" }, {
     url: rec.url,
     title: rec.title,
     body: rec.body,
@@ -604,9 +606,9 @@ function presentOne(db: Db, input: unknown, now: string): PresentedIntakeDraft {
   };
 }
 
-function findExistingItemId(db: Db, url: string): string | undefined {
+function findExistingItemId(db: Db, libraryId: string, url: string): string | undefined {
   // ponytail: scan+normalize, stored unique key if libraries get huge
-  const rows = db.prepare(`SELECT id, url FROM items ORDER BY created_at ASC`).all() as { id: string; url: string }[];
+  const rows = db.prepare(`SELECT id, url FROM items WHERE library_id = ? ORDER BY created_at ASC`).all(libraryId) as { id: string; url: string }[];
   for (const row of rows) {
     try {
       if (sanitizeUrl(row.url) === url) return row.id;
@@ -922,8 +924,9 @@ function idListExists(db: Db, itemId: string, tagId: string): boolean {
   );
 }
 
-function requireLibrary(libraryId: string): void {
+function requireLibrary(libraryId: string): string {
   if (typeof libraryId !== "string" || !libraryId.trim()) throw new RejectedPayload("library is required");
+  return ownedLibraryId(libraryId);
 }
 
 function record(input: unknown, allowed = ALLOWED_FIELDS): Record<string, unknown> {

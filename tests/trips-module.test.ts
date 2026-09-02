@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOCAL_LIBRARY_ID } from "../db/library-id.ts";
 import { openDb } from "../db/open.ts";
 import { addTag } from "../core/commands.ts";
 import { RejectedPayload } from "../core/sanitize.ts";
@@ -162,7 +163,7 @@ test("a dated trip persists with ordered days and reopens with stable identities
     TS,
   );
   assert.ok(trip.id);
-  assert.equal(trip.libraryId, "local");
+  assert.equal(trip.libraryId, LOCAL_LIBRARY_ID);
   assert.equal(trip.title, "Kyoto, Japan", "title defaults to destination");
   assert.equal(trip.timezone, "Asia/Tokyo");
   assert.equal(trip.startDate, "2026-10-12");
@@ -286,7 +287,7 @@ test("agent-shaped payload fields are never stored as user facts", () => {
     } as TripSetupInput,
     TS,
   );
-  assert.equal(trip.libraryId, "local", "library comes from the trusted adapter argument");
+  assert.equal(trip.libraryId, LOCAL_LIBRARY_ID, "library comes from the trusted adapter argument");
   assert.ok(!("actor" in trip));
   assert.deepEqual(trip.context.pace, "user typed this");
   assert.throws(

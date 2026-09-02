@@ -1,5 +1,6 @@
 import type { Db } from "../db/open.ts";
 import { newId, nowIso } from "../db/open.ts";
+import { ownedLibraryId } from "../db/library-id.ts";
 import { enqueueAtlasItem } from "./atlas/module.ts";
 import { reconcileItem } from "./reading/module.ts";
 
@@ -26,11 +27,12 @@ export function persistNewItem(
 ): string {
   const itemId = newId();
   const now = nowIso();
+  const libraryId = ownedLibraryId(input.libraryId);
   db.prepare(
     `INSERT INTO items (
       id, content_type, title, body, url, author_name, author_handle, published_at, source_saved_at,
-      first_observed_at, captured_at, media, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      first_observed_at, captured_at, media, created_at, updated_at, library_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     itemId,
     input.draft.contentType,
@@ -46,12 +48,13 @@ export function persistNewItem(
     JSON.stringify(input.draft.media ?? []),
     now,
     now,
+    libraryId,
   );
   db.prepare(`INSERT INTO item_state (item_id, status, snoozed_until, updated_at) VALUES (?, 'inbox', NULL, ?)`).run(itemId, now);
   db.prepare(
     `INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, ?, ?, 'locus', ?)`,
   ).run(newId(), itemId, input.activityKind, input.firstObservedAt, input.captureRunId);
-  reconcileItem(db, input.libraryId, itemId);
-  enqueueAtlasItem(db, input.libraryId, itemId);
+  reconcileItem(db, libraryId, itemId);
+  enqueueAtlasItem(db, libraryId, itemId);
   return itemId;
 }

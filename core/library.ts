@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { ownedLibraryId } from "../db/library-id.ts";
 import { readingAssetsRoot, type Db } from "../db/open.ts";
 import { localDay } from "./dates.ts";
 export { localDay } from "./dates.ts";
@@ -342,13 +343,9 @@ export function getItem(db: Db, id: string): ItemCard | null {
   return row ? hydrate(db, row) : null;
 }
 
-// ponytail: items have no library_id; captured Items belong to the local Library
-// until capture is library-keyed. Unknown and foreign libraryIds both miss.
-const LOCAL_ITEM_LIBRARY_ID = "local";
-
 /** Library-scoped Item lookup. Foreign ids are indistinguishable from unknown. */
 export function getLibraryItem(db: Db, libraryId: string, id: string): ItemCard | null {
-  const row = db.prepare(`${ITEM_SELECT} WHERE i.id = ? AND ? = ?`).get(id, libraryId, LOCAL_ITEM_LIBRARY_ID) as ItemRow | undefined;
+  const row = db.prepare(`${ITEM_SELECT} WHERE i.id = ? AND i.library_id = ?`).get(id, ownedLibraryId(libraryId)) as ItemRow | undefined;
   return row ? hydrate(db, row) : null;
 }
 

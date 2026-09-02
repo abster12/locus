@@ -1,4 +1,5 @@
 import type { Db } from "../../db/open.ts";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import { newId } from "../../db/open.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import { getLibraryItem } from "../../core/library.ts";
@@ -471,16 +472,18 @@ export function requireDayRow(db: Db, tripId: string, dayId: string): DayRow {
 }
 
 export function tripRowOrNull(db: Db, libraryId: string, tripId: string): TripRow | undefined {
-  return db.prepare(`SELECT * FROM trips WHERE library_id = ? AND id = ?`).get(libraryId, tripId) as TripRow | undefined;
+  return db.prepare(`SELECT * FROM trips WHERE library_id = ? AND id = ?`).get(ownedLibraryId(libraryId), tripId) as TripRow | undefined;
 }
 
 export function getTrip(db: Db, libraryId: string, tripId: string): TripDocument | null {
+  libraryId = ownedLibraryId(libraryId);
   const row = db.prepare(`SELECT * FROM trips WHERE library_id = ? AND id = ?`).get(libraryId, tripId) as TripRow | undefined;
   if (!row) return null;
   return toDocument(db, row, listDayRows(db, tripId), listStopRows(db, tripId));
 }
 
 export function listTrips(db: Db, libraryId: string): TripSummary[] {
+  libraryId = ownedLibraryId(libraryId);
   const rows = db
     .prepare(
       `SELECT t.id, t.title, t.destination, t.start_date, t.end_date, t.duration_days, t.revision, t.archived_at, t.updated_at,

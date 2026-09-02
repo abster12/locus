@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOCAL_LIBRARY_ID } from "../db/library-id.ts";
 import { openDb } from "../db/open.ts";
 import { createCollection } from "../core/commands.ts";
 import { listItems, wipeLibrary } from "../core/library.ts";
@@ -81,7 +82,7 @@ test("Account can issue, inspect, and revoke Library capabilities without exposi
     assert.match(issued.url, /\/mcp$/);
     assert.equal(issued.capability.scope, "library:read");
     assert.equal(issued.capability.label, "Claude");
-    assert.equal(issued.capability.libraryId, "local");
+    assert.equal(issued.capability.libraryId, LOCAL_LIBRARY_ID);
 
     const listed = await app.get("/api/library-capabilities");
     const page = (await listed.json()) as { capabilities: { id: string; token?: string; token_hash?: string }[] };

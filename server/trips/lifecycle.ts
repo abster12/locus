@@ -1,4 +1,5 @@
 import type { Db } from "../../db/open.ts";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import { newId, nowIso, tx } from "../../db/open.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import { requireClientMutationId, validateTripSetup, validateTripTitle } from "./policy.ts";
@@ -13,6 +14,7 @@ function clientMutationIdOf(input: unknown): string | null {
 }
 
 export function createTrip(db: Db, libraryId: string, input: unknown, at = nowIso()): TripDocument {
+  libraryId = ownedLibraryId(libraryId);
   const setup = validateTripSetup(input);
   const insert = (when: string): TripDocument => {
     const id = newId();
@@ -50,6 +52,7 @@ export function createTrip(db: Db, libraryId: string, input: unknown, at = nowIs
 }
 
 export function updateTripSetup(db: Db, libraryId: string, tripId: string, input: unknown, at = nowIso()): TripDocument | null {
+  libraryId = ownedLibraryId(libraryId);
   const setup = validateTripSetup(input);
   return withTripMutation(db, libraryId, tripId, {
     kind: "setup",
@@ -80,6 +83,7 @@ export function updateTripSetup(db: Db, libraryId: string, tripId: string, input
 }
 
 export function renameTrip(db: Db, libraryId: string, tripId: string, input: unknown, at = nowIso()): TripDocument | null {
+  libraryId = ownedLibraryId(libraryId);
   const nextTitle = validateTripTitle((input as { title?: unknown } | null)?.title);
   return withTripMutation(db, libraryId, tripId, {
     kind: "rename",
@@ -99,6 +103,7 @@ export function renameTrip(db: Db, libraryId: string, tripId: string, input: unk
  * modified, so its revision does not move; the copy is always active and no
  * share capability exists to inherit. */
 function copyTrip(db: Db, libraryId: string, tripId: string, at: string): TripDocument {
+  libraryId = ownedLibraryId(libraryId);
   const source = getTrip(db, libraryId, tripId)!;
   const id = newId();
   db.prepare(
@@ -143,6 +148,7 @@ function insertClonedStop(db: Db, tripId: string, dayId: string | null, stop: Tr
 }
 
 export function duplicateTrip(db: Db, libraryId: string, tripId: string, input: unknown, at = nowIso()): TripDocument | null {
+  libraryId = ownedLibraryId(libraryId);
   return withTripMutation(db, libraryId, tripId, {
     kind: "duplicate",
     input,
@@ -152,6 +158,7 @@ export function duplicateTrip(db: Db, libraryId: string, tripId: string, input: 
 }
 
 function setArchived(db: Db, libraryId: string, tripId: string, input: unknown, archived: boolean, at: string): TripDocument | null {
+  libraryId = ownedLibraryId(libraryId);
   return withTripMutation(db, libraryId, tripId, {
     kind: archived ? "archive" : "restore",
     input,
@@ -183,6 +190,7 @@ export function restoreTrip(db: Db, libraryId: string, tripId: string, input: un
  * untouched by construction. The delete receipt is owner-scoped and survives
  * the Trip row so an exact retry still returns success. */
 export function deleteTrip(db: Db, libraryId: string, tripId: string, input: unknown): boolean {
+  libraryId = ownedLibraryId(libraryId);
   const rec = (input ?? {}) as Record<string, unknown>;
   if (rec.confirm !== "DELETE") throw new RejectedPayload('delete requires confirm "DELETE"');
   return (

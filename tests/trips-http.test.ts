@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOCAL_LIBRARY_ID } from "../db/library-id.ts";
 import { openDb } from "../db/open.ts";
 import type { TripDocument, TripStop, TripSummary } from "../server/trips/module.ts";
 import { createPlace } from "../server/atlas/module.ts";
@@ -111,7 +112,7 @@ test("trips HTTP: create, list, get, update, csrf, 404, and trusted ownership", 
     assert.equal(create.status, 200);
     const created = ((await create.json()) as { trip: TripDocument }).trip;
     assert.ok(created.id);
-    assert.equal(created.libraryId, "local");
+    assert.equal(created.libraryId, LOCAL_LIBRARY_ID);
     assert.equal(created.title, "Kyoto, Japan");
     assert.equal(created.revision, 1);
     assert.equal(created.durationDays, 4);

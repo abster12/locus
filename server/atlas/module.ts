@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Db } from "../../db/open.ts";
+import { ownedLibraryId } from "../../db/library-id.ts";
 import { newId, nowIso, tx } from "../../db/open.ts";
 import { MissingResource } from "../../core/commands.ts";
 import { getSetting, setSetting } from "../../core/commands.ts";
@@ -205,6 +206,7 @@ export function screeningInputRevision(
 }
 
 export function getAtlasProjection(db: Db, libraryId = LOCAL_LIBRARY_ID): AtlasProjection {
+  libraryId = ownedLibraryId(libraryId);
   const places = loadPlaces(db, libraryId);
   const byId = new Map(places.map((place) => [place.id, place]));
   const homeId = getSetting(db, HOME_SETTING);
@@ -456,6 +458,7 @@ export function enqueueAtlasItem(db: Db, libraryId: string, itemId: string, now 
 /** Queue the cheap Atlas screen. Capture and source updates use this seam, so
  * Atlas never depends on the manual topic-tag action to discover candidates. */
 export function enqueueAtlasScreening(db: Db, libraryId: string, itemId: string, now = nowIso()): void {
+  libraryId = ownedLibraryId(libraryId);
   const item = getItem(db, itemId);
   if (!item) return;
   const revision = screeningInputRevision(item.title, item.body, item.tags.map((tag) => tag.name));
@@ -490,6 +493,7 @@ export function enqueueAtlasScreening(db: Db, libraryId: string, itemId: string,
 }
 
 export function backfillAtlas(db: Db, libraryId = LOCAL_LIBRARY_ID, now = nowIso()): boolean {
+  libraryId = ownedLibraryId(libraryId);
   let cursor = getSetting(db, BACKFILL_SETTING) ?? "";
   const version = getSetting(db, BACKFILL_VERSION_SETTING);
   if (version !== String(SCREENING_POLICY_VERSION)) {
@@ -1043,6 +1047,7 @@ function ensureFromCandidate(db: Db, libraryId: string, candidate: DestinationCa
 }
 
 function insertPlace(db: Db, libraryId: string, name: string, kind: PlaceKind, parentId: string | null, alt: string[], now: string): PlaceRow {
+  libraryId = ownedLibraryId(libraryId);
   if (parentId) {
     const parent = getPlace(db, libraryId, parentId);
     if (!parent) throw new MissingResource("place");
@@ -1079,6 +1084,7 @@ function writeAssignment(
     bump?: boolean;
   },
 ): AssignmentRow {
+  libraryId = ownedLibraryId(libraryId);
   const id = input.existing?.id ?? newId();
   const created = input.existing?.created_at ?? input.now;
   const version = input.existing ? (input.bump === false ? input.existing.write_version : input.existing.write_version + 1) : 1;
@@ -1250,6 +1256,7 @@ function rootPlace(placeId: string, byId: Map<string, PlaceRow>): string {
 }
 
 function loadPlaces(db: Db, libraryId: string): PlaceRow[] {
+  libraryId = ownedLibraryId(libraryId);
   return db
     .prepare(
       `SELECT id, library_id, name, kind, parent_id, alt_names, created_at, updated_at FROM atlas_places WHERE library_id = ?`,
@@ -1258,6 +1265,7 @@ function loadPlaces(db: Db, libraryId: string): PlaceRow[] {
 }
 
 function loadAssignments(db: Db, libraryId: string): AssignmentRow[] {
+  libraryId = ownedLibraryId(libraryId);
   return db
     .prepare(
       `SELECT id, library_id, item_id, outcome, actor, primary_place_id, source_revision, write_version, payload_json, created_at, updated_at
@@ -1267,6 +1275,7 @@ function loadAssignments(db: Db, libraryId: string): AssignmentRow[] {
 }
 
 function loadAssignment(db: Db, libraryId: string, itemId: string): AssignmentRow | undefined {
+  libraryId = ownedLibraryId(libraryId);
   return db
     .prepare(
       `SELECT id, library_id, item_id, outcome, actor, primary_place_id, source_revision, write_version, payload_json, created_at, updated_at
@@ -1295,6 +1304,7 @@ function loadScreening(db: Db, itemId: string): ScreeningRow | undefined {
 }
 
 function getPlace(db: Db, libraryId: string, placeId: string): PlaceRow | undefined {
+  libraryId = ownedLibraryId(libraryId);
   return db
     .prepare(
       `SELECT id, library_id, name, kind, parent_id, alt_names, created_at, updated_at FROM atlas_places WHERE library_id = ? AND id = ?`,
@@ -1303,6 +1313,7 @@ function getPlace(db: Db, libraryId: string, placeId: string): PlaceRow | undefi
 }
 
 function findAtParent(db: Db, libraryId: string, name: string, parentId: string | null): PlaceRow | undefined {
+  libraryId = ownedLibraryId(libraryId);
   const needle = foldName(name);
   const rows = parentId
     ? (db.prepare(`SELECT id, library_id, name, kind, parent_id, alt_names, created_at, updated_at FROM atlas_places WHERE library_id = ? AND parent_id = ?`).all(libraryId, parentId) as PlaceRow[])

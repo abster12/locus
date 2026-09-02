@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb, type Db } from "../db/open.ts";
+import { LOCAL_LIBRARY_ID } from "../db/library-id.ts";
 import { SCHEMA_VERSION } from "../db/schema.ts";
 import { RejectedPayload } from "../core/sanitize.ts";
 import { createPlace } from "../server/atlas/module.ts";
@@ -356,7 +357,7 @@ test("trusted fields in the body never change ownership, and unknown trips are n
   const db = mem();
   const trip = createTrip(db, "local", { destination: "Kyoto", durationDays: 2 }, TS);
   const renamed = renameTrip(db, "local", trip.id, { ...env(1, "r1"), title: "Kyoto in October", libraryId: "hosted-b", actor: "agent" }, TS)!;
-  assert.equal(renamed.libraryId, "local", "libraryId in the body is ignored");
+  assert.equal(renamed.libraryId, LOCAL_LIBRARY_ID, "libraryId in the body is ignored");
   assert.equal(renamed.title, "Kyoto in October");
 
   assert.equal(updateTripSetup(db, "hosted-b", trip.id, { ...env(1, "x"), destination: "Hijacked", durationDays: 2 }, TS), null);
@@ -424,7 +425,7 @@ test("trips HTTP: lifecycle routes parse the envelope, ignore actor/libraryId, m
     });
     assert.equal(renamed.status, 200);
     const renamedTrip = ((await renamed.json()) as { trip: TripDocument }).trip;
-    assert.equal(renamedTrip.libraryId, "local");
+    assert.equal(renamedTrip.libraryId, LOCAL_LIBRARY_ID);
     assert.equal(renamedTrip.revision, 2);
 
     // Identical retry replays; stale revision is a 409.

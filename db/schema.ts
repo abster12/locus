@@ -1,7 +1,8 @@
 import type { Db } from "./open.ts";
+import { LOCAL_LIBRARY_ID } from "./library-id.ts";
 import { cleanupSourceConnections } from "./source-lifecycle.ts";
 
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS source_accounts (
   display_name TEXT,
   created_at TEXT NOT NULL,
   account_kind TEXT NOT NULL DEFAULT 'live',
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}',
   UNIQUE(source, external_id, account_kind)
 );
 
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS source_collections (
   name TEXT NOT NULL,
   url TEXT,
   created_at TEXT NOT NULL,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}',
   UNIQUE(source_account_id, external_id)
 );
 
@@ -81,7 +84,8 @@ CREATE TABLE IF NOT EXISTS items (
   captured_at TEXT,
   media TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}'
 );
 
 CREATE TABLE IF NOT EXISTS activities (
@@ -146,13 +150,15 @@ CREATE TABLE IF NOT EXISTS collections (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}'
 );
 
 CREATE TABLE IF NOT EXISTS tags (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
-  color TEXT
+  color TEXT,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}'
 );
 
 CREATE TABLE IF NOT EXISTS memberships (
@@ -171,6 +177,7 @@ CREATE TABLE IF NOT EXISTS notes (
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}',
   FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
 );
 
@@ -183,7 +190,8 @@ CREATE TABLE IF NOT EXISTS summaries (
   generator_version TEXT NOT NULL,
   content TEXT NOT NULL,
   citations TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}'
 );
 
 CREATE TABLE IF NOT EXISTS capture_tokens (
@@ -193,7 +201,8 @@ CREATE TABLE IF NOT EXISTS capture_tokens (
   source_account_id TEXT,
   capabilities TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  revoked_at TEXT
+  revoked_at TEXT,
+  library_id TEXT NOT NULL DEFAULT '${LOCAL_LIBRARY_ID}'
 );
 
 CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -610,6 +619,9 @@ export function migrateSchema(db: Db): void {
   const current = Number((db.prepare(`PRAGMA user_version`).get() as { user_version?: number } | undefined)?.user_version ?? 0);
   if (current >= SCHEMA_VERSION) return;
 
+  const rewriteLibraryIds = current < 30;
+  // Composite reading FKs include library_id; rewrite them with checks off.
+  if (rewriteLibraryIds) db.exec("PRAGMA foreign_keys = OFF");
   db.exec("BEGIN IMMEDIATE");
   try {
     // Clean data that could not satisfy the new Item and target relationships.
@@ -654,6 +666,7 @@ export function migrateSchema(db: Db): void {
     if (current < 27) migrateIntakeBatches(db);
     if (current < 28) migrateIntakeAgentWrite(db);
     if (current < 29) migrateLibraryCapabilities(db);
+    if (current < 30) migrateLibraryTenancy(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -664,6 +677,8 @@ export function migrateSchema(db: Db): void {
       // Preserve the original migration error.
     }
     throw error;
+  } finally {
+    if (rewriteLibraryIds) db.exec("PRAGMA foreign_keys = ON");
   }
 }
 
@@ -727,6 +742,57 @@ function migrateLibraryCapabilities(db: Db): void {
     );
     CREATE INDEX IF NOT EXISTS idx_library_capabilities_library ON library_capabilities(library_id, revoked_at);
   `);
+}
+
+const LIBRARY_ID_NEW_TABLES = [
+  "items",
+  "source_accounts",
+  "source_collections",
+  "capture_tokens",
+  "collections",
+  "tags",
+  "notes",
+  "summaries",
+] as const;
+
+const LIBRARY_ID_EXISTING_TABLES = [
+  "item_intake",
+  "intake_batches",
+  "library_capabilities",
+  "reading_documents",
+  "reading_provenance",
+  "reading_progress",
+  "reading_assets",
+  "kitchen_recipe_documents",
+  "kitchen_tonight_entries",
+  "kitchen_tonight_state",
+  "kitchen_tonight_mutations",
+  "atlas_places",
+  "atlas_assignments",
+  "atlas_attempts",
+  "atlas_screenings",
+  "trips",
+  "trip_mutation_receipts",
+  "trip_review_intents",
+] as const;
+
+function hasColumn(db: Db, table: string, column: string): boolean {
+  if (!tableExists(db, table)) return false;
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return columns.some((entry) => entry.name === column);
+}
+
+function migrateLibraryTenancy(db: Db): void {
+  const quoted = LOCAL_LIBRARY_ID.replaceAll("'", "''");
+  for (const table of LIBRARY_ID_NEW_TABLES) {
+    if (!tableExists(db, table) || hasColumn(db, table, "library_id")) continue;
+    db.exec(`ALTER TABLE ${table} ADD COLUMN library_id TEXT NOT NULL DEFAULT '${quoted}'`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_items_library ON items(library_id)`);
+  for (const table of [...LIBRARY_ID_NEW_TABLES, ...LIBRARY_ID_EXISTING_TABLES]) {
+    if (!hasColumn(db, table, "library_id")) continue;
+    db.exec(`UPDATE ${table} SET library_id = '${quoted}' WHERE library_id = 'local'`);
+  }
 }
 
 /** Additive Atlas analyzer state. Existing attempts are deliberately marked

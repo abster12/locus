@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOCAL_LIBRARY_ID } from "../db/library-id.ts";
 import { openDb } from "../db/open.ts";
 import { addTag, createCollection, removeTag } from "../core/commands.ts";
 import { getItem, itemMatchesFilter, listItems } from "../core/library.ts";
@@ -51,6 +52,11 @@ test("a valid URL becomes an ordinary Inbox Item with Intake provenance", () => 
   assert.equal(listItems(db, { source: "you" }).map((item) => item.id).join(), result.item.id);
   assert.equal(getAtlasProjection(db, "local").analysis.queued, 1);
   assert.equal(listItems(db, { source: "x" }).length, 0);
+  assert.equal(
+    (db.prepare(`SELECT library_id FROM items WHERE id = ?`).get(result.item.id) as { library_id: string }).library_id,
+    LOCAL_LIBRARY_ID,
+  );
+  assert.deepEqual(searchLibrary(db, { libraryId: "other-library" }, { url: "https://example.com/essay" }).items, []);
 });
 
 test("agent intake leaves a missing publication date missing", () => {

@@ -1,3 +1,4 @@
+import { ownedLibraryId } from "../../db/library-id.ts";
 import type { Db } from "../../db/open.ts";
 import { foldName, searchPlaces } from "../atlas/module.ts";
 
@@ -16,8 +17,6 @@ type CandidateRow = {
   source: string | null;
   primary_place_id: string | null;
 };
-
-const LOCAL_ITEM_LIBRARY_ID = "local";
 
 /** Bounded picker search. Saved items are Atlas-placed (or not yet classified),
  * never not_atlas reading material. Places stay Atlas Places. Selection fields
@@ -42,7 +41,7 @@ function placeSearchNames(places: { id: string; name: string; altNames: string[]
 }
 
 function searchTripItems(db: Db, libraryId: string, needle: string, namesByPlace: Map<string, string[]>): TripSourceItem[] {
-  if (libraryId !== LOCAL_ITEM_LIBRARY_ID) return [];
+  const owned = ownedLibraryId(libraryId);
   const rows = db
     .prepare(
       `SELECT i.id, i.title, i.body,
@@ -51,10 +50,11 @@ function searchTripItems(db: Db, libraryId: string, needle: string, namesByPlace
          asg.primary_place_id
        FROM items i
        LEFT JOIN atlas_assignments asg ON asg.item_id = i.id AND asg.library_id = ?
-       WHERE (asg.outcome IS NULL OR asg.outcome IN ('placed', 'multiple'))
+       WHERE i.library_id = ?
+         AND (asg.outcome IS NULL OR asg.outcome IN ('placed', 'multiple'))
        ORDER BY i.first_observed_at DESC, i.id`,
     )
-    .all(libraryId) as CandidateRow[];
+    .all(owned, owned) as CandidateRow[];
   const hits: TripSourceItem[] = [];
   for (const row of rows) {
     if (needle && !itemMatches(row, needle, namesByPlace)) continue;
