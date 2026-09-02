@@ -5,6 +5,7 @@ import { cardTitle, firstVisual, hostOf, who } from "./item-content.ts";
 import { sourceLabel } from "./source-icons.ts";
 import { canMountLiveFrame } from "./stage-navigation.ts";
 import { useProse } from "./use-prose.ts";
+import { ClassificationWhy } from "./ClassificationWhy.tsx";
 
 function today(): string {
   const d = new Date();
@@ -381,6 +382,7 @@ export function Stage({ item, startPage, onClose, onItemChange }: {
               </span>
             ))}
           </div>
+          <ClassificationWhy item={item} />
           <div className="stage-organize-row">
             <label htmlFor="stage-collection">Collection</label>
             <select id="stage-collection" value={selectedCollection} onChange={(e) => setSelectedCollection(e.target.value)}>

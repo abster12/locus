@@ -70,7 +70,7 @@ test.describe("account capture setup", { concurrency: false }, () => {
       assert.equal(await page.$eval("h1", (el) => el.textContent?.trim()), "Account");
       assert.deepEqual(
         await page.$$eval("h2", (els) => els.map((el) => el.textContent?.trim())),
-        ["Account", "Capture setup", "Preferences", "Data and privacy"],
+        ["Account", "Library Intake", "Capture setup", "Preferences", "Data and privacy"],
       );
       assert.equal(await page.$eval(".tabs a[aria-current='page']", (el) => el.textContent?.trim()), "Account");
       const local = await page.$eval("#local-account", (el) => ({

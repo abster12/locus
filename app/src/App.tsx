@@ -2,7 +2,9 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboard
 import {
   api,
   boot,
+  type IntakeContext,
   type ItemCard,
+  type PresentedIntakeDraft,
 } from "./api.ts";
 import { canOpenInStage, neverFrame } from "../../core/sanitize.ts";
 import { Stage, frameDenied, isEmbedUrl } from "./Stage.tsx";
@@ -14,6 +16,9 @@ import { AtlasPage } from "./AtlasPage.tsx";
 import { KitchenPage, KitchenDetail } from "./KitchenPage.tsx";
 import { TripsPage } from "./TripsPage.tsx";
 import { CollectionsPage } from "./CollectionsPage.tsx";
+import { SaveLinkDialog } from "./SaveLinkPage.tsx";
+import { IntakeDraftsSheet } from "./intake-drafts-sheet.tsx";
+import { attachLibraryIntakeWebmcp, type IntakeWebmcpHost } from "./library-intake-webmcp.ts";
 import { SummaryPage } from "./SummaryPage.tsx";
 import { canMountLiveFrame, firstStageDestination } from "./stage-navigation.ts";
 import { localDay } from "../../core/dates.ts";
@@ -27,6 +32,7 @@ type Route =
   | { name: "collections" }
   | { name: "collection"; id: string }
   | { name: "account" }
+  | { name: "save" }
   | { name: "reading" }
   | { name: "atlas" }
   | { name: "kitchen" }
@@ -35,6 +41,10 @@ type Route =
   | { name: "tripsSetup" }
   | { name: "trip"; id: string; view: string }
   | { name: "summary"; scope: "day" | "collection"; ref: string };
+
+function isIntakeSurface(name: Route["name"]): boolean {
+  return name === "recent" || name === "inbox" || name === "search" || name === "collections" || name === "collection" || name === "save";
+}
 
 function parseHash(): Route {
   const raw = location.hash.replace(/^#/, "") || "/recent";
@@ -49,6 +59,7 @@ function parseHash(): Route {
   if (a === "collections" && b) return { name: "collection", id: b };
   if (a === "collections") return { name: "collections" };
   if (a === "account") return { name: "account" };
+  if (a === "save") return { name: "save" };
   // Reading is an index only. Ignore any stale/native-reader document segment
   // so `#/reading/:id` renders the ordinary index and shell chrome.
   if (a === "reading") return { name: "reading" };
@@ -246,7 +257,45 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const deskActive = route.name === "recent" || route.name === "inbox";
+  const [intakeDrafts, setIntakeDrafts] = useState<{
+    drafts: PresentedIntakeDraft[];
+    context: IntakeContext;
+  } | null>(null);
+  const intakeSurface = isIntakeSurface(route.name);
+
+  useEffect(() => {
+    if (!ready || !libraryIdentity || !intakeSurface) {
+      setIntakeDrafts(null);
+      return;
+    }
+    let presentedContext: IntakeContext | null = null;
+    const host: IntakeWebmcpHost = {
+      getContext: () => api.intakeContext(),
+      search: (query) => api.intakeSearch(query),
+      async prepare(input) {
+        const result = await api.prepareIntakeDrafts(input);
+        presentedContext = result.context;
+        return result.drafts;
+      },
+      present(drafts) {
+        if (!presentedContext) return;
+        setIntakeDrafts({ drafts, context: presentedContext });
+      },
+      async create(input) {
+        const result = await api.createIntakeBatch(input);
+        notifyLibraryChanged();
+        return result;
+      },
+      log(entry) {
+        if (import.meta.env.DEV) {
+          console.info("library-intake-webmcp", entry.tool, entry.outcome, `${entry.durationMs}ms`, entry.resultCount ?? "");
+        }
+      },
+    };
+    return attachLibraryIntakeWebmcp(host);
+  }, [ready, libraryIdentity, intakeSurface]);
+
+  const deskActive = route.name === "recent" || route.name === "inbox" || route.name === "save";
   if (error) {
     return (
       <div className="shell">
@@ -368,6 +417,15 @@ export function App() {
       </nav>
       {route.name === "recent" && <ItemList view="recent" initialShelf={route.shelf} onOpen={openStage} />}
       {route.name === "inbox" && <ItemList view="inbox" initialShelf={route.shelf} onOpen={openStage} />}
+      {route.name === "save" ? (
+        <SaveLinkDialog
+          onClose={() => go("#/recent")}
+          onSaved={(item) => {
+            notifyLibraryChanged(item);
+            go("#/inbox");
+          }}
+        />
+      ) : null}
       {route.name === "search" && <ItemList view="search" initialQ={route.q} onOpen={openStage} />}
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
@@ -380,6 +438,18 @@ export function App() {
       {route.name === "tripsSetup" && <TripsPage mode="setup" />}
       {route.name === "trip" && <TripsPage mode="document" tripId={route.id} documentView={route.view} />}
       {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
+      {intakeDrafts ? (
+        <IntakeDraftsSheet
+          key={intakeDrafts.drafts.map((draft, index) => `${draft.item.url}:${index}`).join("|")}
+          drafts={intakeDrafts.drafts}
+          context={intakeDrafts.context}
+          onClose={() => setIntakeDrafts(null)}
+          onSaved={() => {
+            notifyLibraryChanged();
+            setIntakeDrafts(null);
+          }}
+        />
+      ) : null}
       <Stage
         key={`${stageItem?.id ?? "closed"}:${stagePage ?? ""}`}
         item={stageItem}
@@ -509,7 +579,7 @@ function NewMenu() {
             <b>Plan a trip</b>
             <small>Create a durable Trip Document.</small>
           </a>
-          <a role="menuitem" href="#/account" onClick={() => setOpen(false)}>
+          <a role="menuitem" href="#/save" onClick={() => setOpen(false)}>
             <b>Save a link</b>
             <small>Capture an Item; readable sources appear in Reading.</small>
           </a>

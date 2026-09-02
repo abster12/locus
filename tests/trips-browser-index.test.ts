@@ -96,7 +96,7 @@ test("trips browser: nav, + New menu, routes, no mutation", async () => {
     );
     assert.deepEqual(items, [
       { href: "#/trips/new", label: "Plan a trip" },
-      { href: "#/account", label: "Save a link" },
+      { href: "#/save", label: "Save a link" },
       { href: "#/kitchen", label: "Make a saved dish cookable" },
     ]);
     assert.equal(
@@ -121,9 +121,14 @@ test("trips browser: nav, + New menu, routes, no mutation", async () => {
     await page.waitForFunction(() => document.activeElement?.getAttribute("href") === "#/trips/new", { timeout: 5000 });
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
-    await waitPage("#/account", "#/account");
+    await page.waitForFunction(
+      () => location.hash === "#/save" && Boolean(document.querySelector("dialog.save-link[open]")),
+      { timeout: 5000 },
+    );
     await page.waitForFunction(() => document.querySelector(".new-menu") === null, { timeout: 5000 });
-    assert.equal(await current("#/account"), "page");
+    assert.equal(await current("#/recent"), "page");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => location.hash === "#/recent" && !document.querySelector("dialog.save-link"), { timeout: 5000 });
 
     await page.click(".new-btn");
     await page.waitForSelector(".new-menu", { timeout: 5000 });

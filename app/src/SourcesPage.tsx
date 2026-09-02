@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type ExtensionHealth, type ImportResult, type ImportSummary, type SourceConnection, type SourceConnectionState } from "./api.ts";
+import { api, type ExtensionHealth, type ImportResult, type ImportSummary, type LibraryCapability, type LibraryCapabilityScope, type SourceConnection, type SourceConnectionState } from "./api.ts";
 import { SourceMark } from "./SourceMark.tsx";
 import { notifyLibraryChanged } from "./library-events.ts";
 
@@ -81,6 +81,11 @@ export function SourcesPage() {
   const [pageError, setPageError] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [deskAction, setDeskAction] = useState<"export" | "restore" | "delete" | null>(null);
+  const [grants, setGrants] = useState<LibraryCapability[] | null>(null);
+  const [grantLabel, setGrantLabel] = useState("");
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [issued, setIssued] = useState<{ id: string; token: string; url: string; scope: LibraryCapabilityScope } | null>(null);
+  const [issuedCopied, setIssuedCopied] = useState(false);
 
   async function reload() {
     try {
@@ -92,8 +97,43 @@ export function SourcesPage() {
       throw e;
     }
   }
+  async function reloadGrants() {
+    const overview = await api.libraryCapabilities();
+    setGrants(overview.capabilities);
+  }
+  async function issueGrant(scope: LibraryCapabilityScope) {
+    if (grantBusy) return;
+    setGrantBusy(true);
+    setPageError(null);
+    setIssuedCopied(false);
+    try {
+      const created = await api.issueLibraryCapability(scope, grantLabel);
+      setIssued({ id: created.capability.id, token: created.token, url: created.url, scope: created.capability.scope });
+      await reloadGrants();
+    } catch (e) {
+      setPageError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGrantBusy(false);
+    }
+  }
+  async function revokeGrant(grant: LibraryCapability) {
+    if (grantBusy) return;
+    if (!confirm(`Revoke ${grant.scope === "library:read" ? "read" : "write"} access${grant.label.trim() ? ` for ${grant.label.trim()}` : ""}?`)) return;
+    setGrantBusy(true);
+    setPageError(null);
+    try {
+      await api.revokeLibraryCapability(grant.id);
+      if (issued?.id === grant.id) setIssued(null);
+      await reloadGrants();
+    } catch (e) {
+      setPageError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGrantBusy(false);
+    }
+  }
   useEffect(() => {
     void reload().catch(() => {});
+    void reloadGrants().catch(() => {});
     const t = setInterval(() => { void reload().catch(() => {}); }, 1500);
     return () => clearInterval(t);
   }, []);
@@ -129,6 +169,66 @@ export function SourcesPage() {
         <h2>Account</h2>
         <h3>Local account</h3>
         <p className="quiet">Your Library is stored on this device.</p>
+      </div>
+
+      <div className="block" id="library-intake-access">
+        <h2>Library Intake</h2>
+        <p className="quiet">Let a chosen agent look up this Library when Locus is not open. This is not Capture access.</p>
+        <label htmlFor="library-intake-agent">Agent name</label>
+        <input
+          id="library-intake-agent"
+          value={grantLabel}
+          maxLength={80}
+          onChange={(e) => setGrantLabel(e.target.value)}
+          placeholder="Claude, Cursor, …"
+        />
+        <div className="source-actions">
+          <button type="button" className="btn" disabled={grantBusy} onClick={() => void issueGrant("library:read")}>
+            Create read access
+          </button>
+          <button type="button" className="btn" disabled={grantBusy} onClick={() => void issueGrant("library:write")}>
+            Create write access
+          </button>
+        </div>
+        {issued ? (
+          <>
+            <label htmlFor="library-intake-secret">Access details</label>
+            <textarea id="library-intake-secret" className="source-pair-code" readOnly value={`${issued.url}\n${issued.token}`} />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                const text = `${issued.url}\n${issued.token}`;
+                const ok = () => setIssuedCopied(true);
+                try {
+                  void navigator.clipboard.writeText(text).then(ok, ok);
+                } catch {
+                  ok();
+                }
+              }}
+            >
+              Copy access details
+            </button>
+            <p role="status">{issuedCopied ? `Copied ${issued.scope === "library:read" ? "read" : "write"} access.` : "Shown once. Copy it now."}</p>
+          </>
+        ) : null}
+        {grants && grants.length > 0 ? (
+          <ul className="library-intake-grants">
+            {grants.map((grant) => (
+              <li key={grant.id}>
+                <span>{grant.label.trim() || "Unnamed agent"} · {grant.scope === "library:read" ? "Read" : "Write"}</span>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={grantBusy}
+                  onClick={() => void revokeGrant(grant)}
+                >
+                  Revoke
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
 
       <h2>Capture setup</h2>

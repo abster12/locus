@@ -42,6 +42,9 @@ import { importRedditExport } from "../../importers/reddit-export/index.ts";
 import { cancelRunner, deleteProfile, getProgress, isRunning, markDone, markRunning, retargetRunner, setProgress, startRunner } from "../../runner/index.ts";
 import { canAccessJob, cancelJobs, enqueueJob, extensionAlive, extensionHealth, finishJob, getJob, heartbeat, jobDeliveryView, jobForTokenId, jobStatusView, retargetJobs, waitJob } from "../capture/jobs.ts";
 import { frameCheck, linkPreview } from "./preview.ts";
+import { commitIntakeBatch, commitIntakeItem, commitReviewedDrafts, createIntakeTag, getIntakeContext, preparePresentedDrafts, previewIntakeItem, searchLibrary } from "../intake/module.ts";
+import { issueLibraryCapability, listLibraryCapabilities, lookupLibraryCapability, revokeLibraryCapability } from "../intake/capabilities.ts";
+import { handleLibraryMcp, libraryCapabilityUsable } from "../intake/mcp.ts";
 import { applyTripChanges, archiveTrip, armReviewIntent, createTrip, deleteTrip, dismissTripAdvisory, duplicateTrip, findSharedSnapshot, getShareState, getTrip, getTripHistory, listTrips, previewShareSnapshot, publishShareSnapshot, redoTripChanges, removeTripInference, renameTrip, renderShareHtml, requireClientMutationId, restoreTrip, recordAgentReview, ReviewIntentError, revokeShareSnapshot, searchTripSources, TripConflict, undoTripChanges, updateTripSetup } from "../trips/facade.ts";
 import { filterCitations, type SummarySnapshotV1 } from "../../core/summaries.ts";
 import { classifySourceAccount, pickConnectionAccount, sourceConnectionState } from "../source-state.ts";
@@ -191,6 +194,96 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const item = getItem(db, params.id ?? "");
     if (!item) return json(res, 404, { error: "not found" });
     json(res, 200, { item });
+  });
+
+  on("POST", "/api/intake", async (_req, res, _url, body) => {
+    const result = commitIntakeItem(db, { libraryId: LOCAL_LIBRARY_ID, actor: "user" }, body);
+    json(res, 200, { item: result.item, outcome: result.outcome });
+  });
+
+  on("POST", "/api/intake/preview", async (_req, res, _url, body) => {
+    json(res, 200, previewIntakeItem(db, { libraryId: LOCAL_LIBRARY_ID, actor: "user" }, body));
+  });
+
+  on("GET", "/api/intake/context", async (_req, res) => {
+    json(res, 200, getIntakeContext(db, { libraryId: LOCAL_LIBRARY_ID }));
+  });
+
+  on("GET", "/api/intake/search", async (_req, res, url) => {
+    const query: { url?: string; q?: string } = {};
+    const itemUrl = url.searchParams.get("url");
+    const q = url.searchParams.get("q");
+    if (itemUrl) query.url = itemUrl;
+    if (q) query.q = q;
+    json(res, 200, searchLibrary(db, { libraryId: LOCAL_LIBRARY_ID }, query));
+  });
+
+  on("POST", "/api/intake/drafts/prepare", async (_req, res, _url, body) => {
+    const drafts = preparePresentedDrafts(db, { libraryId: LOCAL_LIBRARY_ID }, body);
+    json(res, 200, { drafts, context: getIntakeContext(db, { libraryId: LOCAL_LIBRARY_ID }) });
+  });
+
+  on("POST", "/api/intake/drafts/save", async (_req, res, _url, body) => {
+    json(res, 200, commitReviewedDrafts(db, { libraryId: LOCAL_LIBRARY_ID }, body));
+  });
+
+  on("POST", "/api/intake/tags", async (_req, res, _url, body) => {
+    json(res, 200, createIntakeTag(db, { libraryId: LOCAL_LIBRARY_ID }, body));
+  });
+
+  on("POST", "/api/intake/batch", async (_req, res, _url, body) => {
+    json(res, 200, commitIntakeBatch(db, { libraryId: LOCAL_LIBRARY_ID, actor: "agent" }, body));
+  });
+
+  const mcpOrigin = () => `http://127.0.0.1:${port}`;
+  const mcpUrl = () => `${mcpOrigin()}/mcp`;
+
+  on("GET", "/api/library-capabilities", async (_req, res) => {
+    json(res, 200, {
+      capabilities: listLibraryCapabilities(db, LOCAL_LIBRARY_ID),
+      origin: mcpOrigin(),
+      url: mcpUrl(),
+    });
+  });
+
+  on("POST", "/api/library-capabilities", async (_req, res, _url, body) => {
+    const rec = asRec(body);
+    const issued = issueLibraryCapability(db, {
+      libraryId: LOCAL_LIBRARY_ID,
+      scope: rec.scope,
+      label: rec.label,
+    });
+    json(res, 200, {
+      token: issued.token,
+      origin: mcpOrigin(),
+      url: mcpUrl(),
+      capability: issued.capability,
+    });
+  });
+
+  on("POST", "/api/library-capabilities/:id/revoke", async (_req, res, _url, _body, params) => {
+    if (!revokeLibraryCapability(db, LOCAL_LIBRARY_ID, params.id ?? "")) {
+      return json(res, 404, { error: "not found" });
+    }
+    json(res, 200, { revoked: true });
+  });
+
+  on("GET", "/mcp", async (_req, res) => {
+    res.writeHead(405, { allow: "POST" }).end();
+  });
+
+  on("POST", "/mcp", async (req, res, _url, body) => {
+    const token = bearer(req);
+    const capability = token ? lookupLibraryCapability(db, token) : null;
+    if (!capability || !libraryCapabilityUsable(capability)) {
+      return json(res, 401, { error: "unauthorized" });
+    }
+    const handled = handleLibraryMcp(db, capability, body);
+    if (handled.status === 202) {
+      res.writeHead(202).end();
+      return;
+    }
+    json(res, handled.status, handled.body);
   });
 
   on("POST", "/api/items/:id/status", async (_req, res, _url, body, params) => {
@@ -1013,6 +1106,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       }
 
       const isCapture = url.pathname.startsWith("/capture/");
+      const isMcp = url.pathname === "/mcp";
       const isApi = url.pathname.startsWith("/api/");
       const mutating = req.method !== "GET" && req.method !== "HEAD";
       const archiveImport = url.pathname === "/api/library/import" && req.method === "POST";
@@ -1021,21 +1115,21 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
         : url.pathname.startsWith("/api/import/")
           ? MAX_IMPORT_BODY_BYTES
           : MAX_REQUEST_BODY_BYTES;
-      if (mutating && (isApi || isCapture) && declaredContentLength(req) > bodyLimit) {
+      if (mutating && (isApi || isCapture || isMcp) && declaredContentLength(req) > bodyLimit) {
         req.resume();
         json(res, 413, { error: "request body too large" });
         return;
       }
-      if (mutating && (isApi || isCapture)) console.info(`${req.method} ${url.pathname}`);
+      if (mutating && (isApi || isCapture || isMcp)) console.info(`${req.method} ${url.pathname}`);
 
       // Validated session id from the signed cookie (unique per issued session);
       // null when absent/invalid. /api/session is the only route allowed to
       // proceed without one.
       const sessionId = isApi ? validSession(install, req.headers.cookie) : null;
 
-      if (isApi || isCapture) {
+      if (isApi || isCapture || isMcp) {
         const origin = req.headers.origin;
-        if (origin && !allowedOrigin(origin, port) && !isCapture) {
+        if (origin && !allowedOrigin(origin, port) && !isCapture && !isMcp) {
           res.writeHead(403).end("bad origin");
           return;
         }

@@ -429,7 +429,7 @@ function RecipeRow({ item, onTonight, onAdd }: { item: KitchenItem; onTonight: b
           {item.showCaptionPreview && item.caption ? <span className="kitchen-row-caption">{item.caption}</span> : null}
           <span className="kitchen-row-meta">
             {who(item.item) ? <span>{who(item.item)}</span> : null}
-            <SourceMark source={String(item.item.source)} />
+            <SourceMark source={item.item.source} />
             <span>{pubLabel(item.item.firstObservedAt)}</span>
           </span>
           <span className={`kitchen-avail kitchen-avail-${item.availability}`}>{AVAILABILITY_LABEL[item.availability]}</span>
@@ -501,7 +501,7 @@ function TonightRow({
         <a className="kitchen-tonight-open" href={href}>
           {visual ? <img src={visual.url} alt="" referrerPolicy="no-referrer" loading="lazy" /> : null}
           <span className="kitchen-tonight-title">{item!.displayTitle}</span>
-          <SourceMark source={String(item!.item.source)} />
+          <SourceMark source={item!.item.source} />
         </a>
       ) : (
         <span className="kitchen-tonight-open kitchen-tonight-missing">
@@ -757,7 +757,7 @@ function DetailHeader({
       </div>
       <p className="kitchen-detail-byline">
         {who(data.item) ? <span>{who(data.item)}</span> : null}
-        <SourceMark source={String(data.item.source)} />
+        <SourceMark source={data.item.source} />
       </p>
       {factsSlot}
       <div className="kitchen-detail-actions">

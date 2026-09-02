@@ -1,6 +1,7 @@
 import { sourceIcon, sourceLabel } from "./source-icons.ts";
 
-export function SourceMark({ source, named = true }: { source: string; named?: boolean }) {
+export function SourceMark({ source, named = true }: { source: string | null; named?: boolean }) {
+  if (!source) return null;
   const name = sourceLabel(source);
   return (
     <span className={`sourcemark src-${source}`} title={name}>

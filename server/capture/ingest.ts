@@ -8,6 +8,7 @@ import type { CaptureBatchV1, CaptureFinishV1, CaptureSessionV1 } from "../../pa
 import { LOCAL_LIBRARY_ID, reconcileItem, wakeReadingWorker } from "../reading/module.ts";
 import { enqueueAtlasItem } from "../atlas/module.ts";
 import { wakeAtlasWorker } from "../atlas/ai.ts";
+import { persistNewItem } from "../item-persist.ts";
 
 export interface CaptureToken {
   id: string;
@@ -303,32 +304,25 @@ function upsertItem(
     return "updated";
   }
 
-  const itemId = newId();
   const recordId = existing?.id ?? newId();
-  db.prepare(
-    `INSERT INTO items (
-      id, content_type, title, body, url, author_name, author_handle, published_at, source_saved_at,
-      first_observed_at, captured_at, media, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    itemId,
-    draft.contentType,
-    draft.title ?? null,
-    draft.body ?? null,
-    draft.url,
-    draft.authorName ?? null,
-    draft.authorHandle ?? null,
-    publishedAt,
-    sourceSavedAt,
-    args.observedAt,
-    args.observedAt,
-    JSON.stringify(draft.media ?? []),
-    nowIso(),
-    nowIso(),
-  );
-  db.prepare(
-    `INSERT INTO item_state (item_id, status, snoozed_until, updated_at) VALUES (?, 'inbox', NULL, ?)`,
-  ).run(itemId, nowIso());
+  const itemId = persistNewItem(db, {
+    libraryId: LOCAL_LIBRARY_ID,
+    draft: {
+      contentType: draft.contentType,
+      title: draft.title,
+      body: draft.body,
+      url: draft.url,
+      authorName: draft.authorName,
+      authorHandle: draft.authorHandle,
+      publishedAt,
+      sourceSavedAt,
+      media: draft.media,
+    },
+    firstObservedAt: args.observedAt,
+    capturedAt: args.observedAt,
+    activityKind: args.activityKind,
+    captureRunId: args.captureRunId,
+  });
   if (existing) {
     db.prepare(`UPDATE source_records SET item_id = ?, last_observed_at = ?, revision = ?, source_position = ? WHERE id = ?`).run(
       itemId,
@@ -357,12 +351,6 @@ function upsertItem(
   db.prepare(
     `INSERT OR IGNORE INTO source_memberships (source_collection_id, source_record_id, source_position) VALUES (?, ?, ?)`,
   ).run(args.collectionId, recordId, change.sourcePosition ?? null);
-  db.prepare(
-    `INSERT INTO activities (id, item_id, kind, occurred_at, timestamp_source, capture_run_id) VALUES (?, ?, ?, ?, 'locus', ?)`,
-  ).run(newId(), itemId, args.activityKind, args.observedAt, args.captureRunId);
-  // Same SQLite transaction as the Item write: a crash cannot keep the post without Reading rows.
-  reconcileItem(db, LOCAL_LIBRARY_ID, itemId);
-  enqueueAtlasItem(db, LOCAL_LIBRARY_ID, itemId);
   return "inserted";
 }
 

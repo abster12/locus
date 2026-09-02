@@ -8,6 +8,7 @@ import { SourceMark } from "./SourceMark.tsx";
 import { useItemList } from "./use-item-list.ts";
 import { usefulPreview, useLinkPreview } from "./link-preview.ts";
 import { CapturedMedia, Poster } from "./ItemVisuals.tsx";
+import { ClassificationWhy } from "./ClassificationWhy.tsx";
 import { localDay } from "../../core/dates.ts";
 import { useProse } from "./use-prose.ts";
 function previewUrls(item: ItemCard): { text: string; links: string[] } {
@@ -191,9 +192,9 @@ export function ItemList({
         <div>
           <div className="toolbar">
             <div className="filters">
-              {["", "x", "instagram", "youtube", "reddit"].map((s) => (
-                <button key={s || "all"} className={`chip ${s ? `src-${s}` : ""} ${source === s ? "active" : ""}`} onClick={() => setSource(s)}>
-                  {s ? <span className="ico" dangerouslySetInnerHTML={{ __html: sourceIcon(s) }} /> : null}
+              {["", "you", "x", "instagram", "youtube", "reddit"].map((s) => (
+                <button key={s || "all"} className={`chip ${s && sourceIcon(s) ? `src-${s}` : ""} ${source === s ? "active" : ""}`} onClick={() => setSource(s)}>
+                  {s && sourceIcon(s) ? <span className="ico" dangerouslySetInnerHTML={{ __html: sourceIcon(s) }} /> : null}
                   {s ? sourceLabel(s) : "All"}
                 </button>
               ))}
@@ -330,7 +331,7 @@ function PostCard({
   const visual = firstVisual(item);
   return (
     <article
-      className={`post src-${item.source}`}
+      className={item.source ? `post src-${item.source}` : "post"}
       tabIndex={0}
       aria-label={`${cardTitle(item) || "Saved item"} by ${who(item) || hostOf(item.url)}`}
       onClick={(e) => {
@@ -351,7 +352,7 @@ function PostCard({
           <span className="handle">{who(item) || hostOf(item.url)}</span>
           <span className="by-date">{pubLabel(wallAt(item))}</span>
         </div>
-        <SourceMark source={item.source} />
+        {item.intakeActor === "user" ? <span className="intake-mark">Added by you</span> : item.intakeActor === "agent" ? <span className="intake-mark">Added by agent</span> : <SourceMark source={item.source} />}
       </header>
       {showTitle ? <h3>{title}</h3> : null}
       {text ? <Excerpt text={text} /> : null}
@@ -379,6 +380,7 @@ function PostCard({
           </a>
         </div>
       </footer>
+      <ClassificationWhy item={item} />
       {statusMessage ? <p className={statusMessage.kind === "bad" ? "action-error" : "action-ok"} role="status">{statusMessage.text}</p> : null}
     </article>
   );

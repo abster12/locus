@@ -31,6 +31,10 @@ type WebmcpWindow = {
 // Source string on purpose: the TS build wraps named functions in __name(),
 // which only exists at module scope, so a serialized callback would crash.
 const FAKE_WEBMCP_RUNTIME = `
+  const tracked = new Set([
+    "apply_trip_changes", "build_trip_draft", "create_trip", "get_trip", "get_trip_share_preview",
+    "list_trips", "present_trip_recommendations", "record_trip_review", "search_trip_sources", "validate_trip",
+  ]);
   const tools = new Map();
   const regs = { count: 0 };
   window.__locusTripsTools = tools;
@@ -38,9 +42,12 @@ const FAKE_WEBMCP_RUNTIME = `
   Object.defineProperty(document, "modelContext", {
     value: {
       registerTool(tool, options = {}) {
-        regs.count += 1;
-        tools.set(tool.name, tool);
-        const remove = () => tools.delete(tool.name);
+        const ours = tracked.has(tool.name);
+        if (ours) {
+          regs.count += 1;
+          tools.set(tool.name, tool);
+        }
+        const remove = () => { if (ours) tools.delete(tool.name); };
         if (options.signal?.aborted) remove();
         else options.signal?.addEventListener("abort", remove, { once: true });
         return Promise.resolve();
@@ -59,6 +66,27 @@ function insertItem(db: ReturnType<typeof mem>, id: string, title: string): void
     `INSERT INTO items (id, content_type, title, body, url, first_observed_at, media, created_at, updated_at)
      VALUES (?, 'post', ?, NULL, ?, ?, '[]', ?, ?)`,
   ).run(id, title, `https://x.com/a/status/${id}`, TS, TS, TS);
+}
+
+const TRIP_TOOL_NAMES = [
+  "apply_trip_changes",
+  "build_trip_draft",
+  "create_trip",
+  "get_trip",
+  "get_trip_share_preview",
+  "list_trips",
+  "present_trip_recommendations",
+  "record_trip_review",
+  "search_trip_sources",
+  "validate_trip",
+];
+
+function waitForTripsToolsGone(page: Page) {
+  return page.waitForFunction(
+    (names: string[]) => names.every((name) => !(window as unknown as WebmcpWindow).__locusTripsTools?.has(name)),
+    { timeout: 5000 },
+    TRIP_TOOL_NAMES,
+  );
 }
 
 async function invokeTool(page: Page, name: string, input: unknown): Promise<Record<string, unknown>> {
@@ -254,7 +282,7 @@ test("trips page registers three index tools and nine document tools, applies ex
     await page.evaluate(() => {
       location.hash = "#/recent";
     });
-    await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 8) === 0, { timeout: 5000 });
+    await waitForTripsToolsGone(page);
     assert.equal(
       await page.evaluate(() => (window as unknown as WebmcpWindow).__locusTripsRegsState?.count),
       12,
@@ -417,7 +445,7 @@ test("record_trip_review appears only after the user asks, saves a visible advis
     await page.evaluate(() => {
       location.hash = "#/recent";
     });
-    await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 9) === 0, { timeout: 5000 });
+    await waitForTripsToolsGone(page);
     await page.evaluate((tripHash: string) => {
       location.hash = tripHash;
     }, `#/trips/${trip.id}`);
@@ -501,7 +529,7 @@ test("arming the review UI needs a successful arm request: failures disarm, a re
     await page.evaluate(() => {
       location.hash = "#/recent";
     });
-    await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 9) === 0, { timeout: 5000 });
+    await waitForTripsToolsGone(page);
     await page.evaluate((tripHash: string) => {
       location.hash = tripHash;
     }, `#/trips/${trip.id}`);
@@ -736,7 +764,7 @@ test("build_trip_draft makes visible Drafts and present_trip_recommendations sho
     await page.evaluate(() => {
       location.hash = "#/recent";
     });
-    await page.waitForFunction(() => ((window as unknown as WebmcpWindow).__locusTripsTools?.size ?? 8) === 0, { timeout: 5000 });
+    await waitForTripsToolsGone(page);
     await page.evaluate((tripHash: string) => {
       location.hash = tripHash;
     }, `#/trips/${trip.id}`);

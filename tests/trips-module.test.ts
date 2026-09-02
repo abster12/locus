@@ -976,7 +976,7 @@ test("an Item reference resolves authoritative display data and never copies it"
   assert.deepEqual(stop.resolved, {
     kind: "item",
     title: "Quiet coffee kissaten worth the walk",
-    source: "x",
+    source: null,
     url: "https://x.com/a/status/9",
   });
   assert.match(applied.changeset.summary, /added "Quiet coffee kissaten/, "history names the resolved title");

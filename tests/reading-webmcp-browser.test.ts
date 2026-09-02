@@ -30,6 +30,7 @@ type WebmcpWindow = {
 // wraps named functions from this file in a __name() helper that only exists
 // at module scope, so a serialized function callback would crash in the page.
 const FAKE_WEBMCP_RUNTIME = `
+  const tracked = new Set(["get_reading", "get_reading_context", "present_reading_recommendations", "search_reading"]);
   const tools = new Map();
   const regs = { count: 0 };
   window.__locusReadingTools = tools;
@@ -37,9 +38,12 @@ const FAKE_WEBMCP_RUNTIME = `
   Object.defineProperty(document, "modelContext", {
     value: {
       registerTool(tool, options = {}) {
-        regs.count += 1;
-        tools.set(tool.name, tool);
-        const remove = () => tools.delete(tool.name);
+        const ours = tracked.has(tool.name);
+        if (ours) {
+          regs.count += 1;
+          tools.set(tool.name, tool);
+        }
+        const remove = () => { if (ours) tools.delete(tool.name); };
         if (options.signal?.aborted) remove();
         else options.signal?.addEventListener("abort", remove, { once: true });
         return Promise.resolve();
@@ -251,10 +255,12 @@ test("reading page registers four WebMCP tools, renders presented recommendation
     // Lifecycle: navigating away removes all four tools; returning registers
     // once more (three cycles: initial, Library change, route return).
     await page.evaluate(() => {
-      location.hash = "#/kitchen";
+      location.hash = "#/recent";
     });
     await page.waitForFunction(
-      () => ((window as unknown as WebmcpWindow).__locusReadingTools?.size ?? 4) === 0,
+      (names: string[]) => names.every((name) => !(window as unknown as WebmcpWindow).__locusReadingTools?.has(name)),
+      undefined,
+      ["get_reading", "get_reading_context", "present_reading_recommendations", "search_reading"],
     );
     assert.equal(
       await page.evaluate(() => (window as unknown as WebmcpWindow).__locusReadingRegsState?.count),

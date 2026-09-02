@@ -1373,7 +1373,7 @@ function loadProvenance(db: Db, libraryId: string, documentId: string): ReadingP
         observedUrl: row.observed_url,
         title: item.title,
         body: item.body,
-        source: String(item.source),
+        source: item.source ?? "",
         authorName: item.authorName,
         authorHandle: item.authorHandle,
         permalink: item.url,

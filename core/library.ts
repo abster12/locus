@@ -20,13 +20,15 @@ export interface ItemCard {
   firstObservedAt: string;
   capturedAt: string | null;
   media: { kind: string; url: string }[];
-  source: SourceId | string;
+  source: SourceId | string | null;
   status: ItemStatus;
   snoozedUntil: string | null;
   tags: { id: string; name: string; color: string | null }[];
   collections: { id: string; name: string }[];
   notes: { id: string; body: string; createdAt: string }[];
   dateLabel: DateLabel;
+  intakeActor?: "user" | "agent" | null;
+  classifications?: { tagId: string; rationale: string; evidence: { field: string; text: string }[] }[];
 }
 
 type ItemRow = {
@@ -45,6 +47,7 @@ type ItemRow = {
   status: string | null;
   snoozed_until: string | null;
   source: string | null;
+  intake_actor: string | null;
 };
 
 export interface ItemListFilter {
@@ -117,6 +120,9 @@ function hydrate(db: Db, row: ItemRow): ItemCard {
   const notes = db
     .prepare(`SELECT id, body, created_at as createdAt FROM notes WHERE item_id = ? ORDER BY created_at`)
     .all(row.id) as { id: string; body: string; createdAt: string }[];
+  const evidenceRows = db
+    .prepare(`SELECT tag_id, rationale, evidence_json FROM intake_tag_evidence WHERE item_id = ? ORDER BY tag_id`)
+    .all(row.id) as { tag_id: string; rationale: string; evidence_json: string }[];
   const item = {
     sourceSavedAt: row.source_saved_at,
     firstObservedAt: row.first_observed_at,
@@ -136,20 +142,27 @@ function hydrate(db: Db, row: ItemRow): ItemCard {
     firstObservedAt: row.first_observed_at,
     capturedAt: row.captured_at,
     media: parseMedia(row.media),
-    source: (row.source ?? "x") as SourceId,
+    source: row.source,
     status: (row.status ?? "inbox") as ItemStatus,
     snoozedUntil: row.snoozed_until,
     tags,
     collections,
     notes,
     dateLabel: dateLabel(item),
+    intakeActor: row.intake_actor === "user" || row.intake_actor === "agent" ? row.intake_actor : null,
+    classifications: evidenceRows.map((entry) => ({
+      tagId: entry.tag_id,
+      rationale: entry.rationale,
+      evidence: JSON.parse(entry.evidence_json) as { field: string; text: string }[],
+    })),
   };
 }
 
 const ITEM_SELECT = `
   SELECT i.*, COALESCE(s.status, 'inbox') AS status, s.snoozed_until,
     (SELECT a.source FROM source_records r JOIN source_accounts a ON a.id = r.source_account_id
-      WHERE r.item_id = i.id LIMIT 1) AS source
+      WHERE r.item_id = i.id LIMIT 1) AS source,
+    (SELECT n.actor FROM item_intake n WHERE n.item_id = i.id) AS intake_actor
   FROM items i
   LEFT JOIN item_state s ON s.item_id = i.id
 `;
@@ -194,7 +207,9 @@ function matchingWhere(filter: ItemListFilter, includeShelf = true): { where: st
     // saves remain visible; archived and rejected saves leave it.
     where.push(`COALESCE(s.status, 'inbox') NOT IN ('archived', 'rejected')`);
   }
-  if (filter.source) {
+  if (filter.source === "you") {
+    where.push(`EXISTS (SELECT 1 FROM item_intake n WHERE n.item_id = i.id AND n.actor = 'user')`);
+  } else if (filter.source) {
     where.push(`EXISTS (
       SELECT 1 FROM source_records r JOIN source_accounts a ON a.id = r.source_account_id
       WHERE r.item_id = i.id AND a.source = ?
@@ -388,7 +403,7 @@ function cited(db: Db, ids: string[]): CitedItemV1[] {
         url: item.url,
         authorName: item.authorName,
         authorHandle: item.authorHandle,
-        source: String(item.source),
+        source: item.source ?? "",
         contentType: item.contentType,
       },
     ];
@@ -423,8 +438,7 @@ export function buildSummary(
   const byCollection = new Map<string, string[]>();
   const inboxIds: string[] = [];
   for (const item of items) {
-    const src = String(item.source);
-    bySource.set(src, [...(bySource.get(src) ?? []), item.id]);
+    if (item.source) bySource.set(item.source, [...(bySource.get(item.source) ?? []), item.id]);
     const creator = item.authorHandle || item.authorName;
     if (creator) byCreator.set(creator, [...(byCreator.get(creator) ?? []), item.id]);
     for (const tag of item.tags) byTag.set(tag.name, [...(byTag.get(tag.name) ?? []), item.id]);
@@ -505,6 +519,9 @@ export function wipeLibrary(db: Db): void {
     "collections",
     "item_state",
     "activities",
+    "intake_batches",
+    "intake_tag_evidence",
+    "item_intake",
     "source_memberships",
     "source_records",
     "items",
@@ -513,6 +530,7 @@ export function wipeLibrary(db: Db): void {
     "capture_sessions",
     "capture_runs",
     "capture_tokens",
+    "library_capabilities",
     "source_collections",
     "source_accounts",
   ];

@@ -9,13 +9,15 @@ const ICONS: Record<string, string> = {
 };
 
 const LABELS: Record<string, string> = {
+  you: "You",
   x: "X",
   instagram: "Instagram",
   youtube: "YouTube",
   reddit: "Reddit",
 };
 
-export function sourceLabel(source: string): string {
+export function sourceLabel(source: string | null | undefined): string {
+  if (!source) return "";
   return LABELS[source] ?? source;
 }
 

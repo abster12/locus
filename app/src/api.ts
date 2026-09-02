@@ -17,7 +17,7 @@ export interface ItemCard {
   sourceSavedAt: string | null;
   firstObservedAt: string;
   capturedAt: string | null;
-  source: string;
+  source: string | null;
   status: string;
   snoozedUntil: string | null;
   tags: { id: string; name: string; color: string | null }[];
@@ -25,7 +25,58 @@ export interface ItemCard {
   notes: { id: string; body: string; createdAt: string }[];
   dateLabel: { kind: string; at: string; text: string };
   media: { kind: string; url: string }[];
+  intakeActor?: "user" | "agent" | null;
+  classifications?: { tagId: string; rationale: string; evidence: { field: string; text: string }[] }[];
 }
+
+export interface IntakeContext {
+  version: string;
+  collections: { id: string; name: string; description: string | null }[];
+  tags: { id: string; name: string; color: string | null; consequence: string | null }[];
+}
+
+export interface IntakeSearchHit {
+  id: string;
+  title: string;
+  url: string;
+  source: string | null;
+}
+
+export interface PresentedIntakeDraft {
+  item: {
+    url: string;
+    title: string | null;
+    body: string | null;
+    authorName: string | null;
+    publishedAt: string | null;
+    media: { kind: string; url: string }[];
+  };
+  missing: string[];
+  collections: { id: string; name: string; description: string | null }[];
+  tags: { id: string | null; name: string; proposed: boolean }[];
+  rationale: string | null;
+  evidenceBasis: string | null;
+  uncertainty: string | null;
+}
+
+export type IntakePreview = {
+  item: PresentedIntakeDraft["item"];
+  missing: string[];
+  collections: { id: string; name: string; description: string | null }[];
+  tags: { id: string | null; name: string }[];
+};
+
+export type SaveLinkInput = {
+  url: string;
+  title?: string;
+  body?: string;
+  authorName?: string;
+  publishedAt?: string;
+  media?: { kind: string; url: string }[];
+  tagIds?: string[];
+  collectionIds?: string[];
+  newTags?: string[];
+};
 
 export interface ItemCounts {
   total: number;
@@ -259,6 +310,58 @@ export const api = {
   allItems: (q = "", signal?: AbortSignal) => allItemPages(q, signal),
   itemCounts: (q = "") => req<{ counts: ItemCounts }>(`/api/items/counts${q ? `?${q}` : ""}`),
   item: (id: string) => req<{ item: ItemCard }>(`/api/items/${id}`),
+  intakeContext: (signal?: AbortSignal) => req<IntakeContext>("/api/intake/context", { signal }),
+  intakeSearch: (query: { url?: string; q?: string }, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    if (query.url) params.set("url", query.url);
+    if (query.q) params.set("q", query.q);
+    const qs = params.toString();
+    return req<{ items: IntakeSearchHit[] }>(`/api/intake/search${qs ? `?${qs}` : ""}`, { signal });
+  },
+  prepareIntakeDrafts: (input: unknown, signal?: AbortSignal) =>
+    req<{ drafts: PresentedIntakeDraft[]; context: IntakeContext }>("/api/intake/drafts/prepare", {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+    }),
+  createIntakeTag: (name: string, signal?: AbortSignal) =>
+    req<{ tag: { id: string; name: string }; context: IntakeContext }>("/api/intake/tags", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+      signal,
+    }),
+  saveReviewedDrafts: (input: unknown, signal?: AbortSignal) =>
+    req<{
+      actor: "user" | "agent";
+      drafts: {
+        outcome: "created" | "reused";
+        item: ItemCard;
+        added: { tagIds: string[]; collectionIds: string[] };
+        alreadyPresent: { tagIds: string[]; collectionIds: string[] };
+      }[];
+    }>("/api/intake/drafts/save", {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+    }),
+  createIntakeBatch: (input: unknown, signal?: AbortSignal) =>
+    req<{
+      actor: "user" | "agent";
+      drafts: {
+        outcome: "created" | "reused";
+        item: ItemCard;
+        added: { tagIds: string[]; collectionIds: string[] };
+        alreadyPresent: { tagIds: string[]; collectionIds: string[] };
+      }[];
+    }>("/api/intake/batch", {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+    }),
+  previewLink: (input: SaveLinkInput, signal?: AbortSignal) =>
+    req<IntakePreview>("/api/intake/preview", { method: "POST", body: JSON.stringify(input), signal }),
+  saveLink: (input: SaveLinkInput) =>
+    req<{ item: ItemCard; outcome: "created" | "reused" }>("/api/intake", { method: "POST", body: JSON.stringify(input) }),
   status: (id: string, status: string, snoozedUntil?: string) =>
     req<{ item: ItemCard }>(`/api/items/${id}/status`, { method: "POST", body: JSON.stringify({ status, snoozedUntil }) }),
   addTag: (id: string, name: string) =>
@@ -315,6 +418,18 @@ export const api = {
     req(`/api/sources/${source}/disconnect`, { method: "POST", body: JSON.stringify({ accountId }) }),
   pairExtension: () =>
     req<{ token: string; origin: string }>("/api/extension/pair", { method: "POST", body: "{}" }),
+  libraryCapabilities: () =>
+    req<{ capabilities: LibraryCapability[]; origin: string; url: string }>("/api/library-capabilities"),
+  issueLibraryCapability: (scope: LibraryCapabilityScope, label: string) =>
+    req<{ token: string; origin: string; url: string; capability: LibraryCapability }>("/api/library-capabilities", {
+      method: "POST",
+      body: JSON.stringify({ scope, label }),
+    }),
+  revokeLibraryCapability: (id: string) =>
+    req<{ revoked: boolean }>(`/api/library-capabilities/${encodeURIComponent(id)}/revoke`, {
+      method: "POST",
+      body: "{}",
+    }),
   settings: (refreshOnOpen: boolean) =>
     req("/api/settings", { method: "POST", body: JSON.stringify({ refreshOnOpen }) }),
   exportLibrary: async () => {
@@ -973,6 +1088,17 @@ export interface SourceConnection {
   progress: SourceProgress | null;
   latestAttempt: SourceRunSummary | null;
   lastSuccessfulCapture: SourceRunSummary | null;
+}
+
+export type LibraryCapabilityScope = "library:read" | "library:write";
+
+export interface LibraryCapability {
+  id: string;
+  libraryId: string;
+  scope: LibraryCapabilityScope;
+  label: string;
+  createdAt: string;
+  revokedAt: string | null;
 }
 
 export interface AccountSourcesOverview {

@@ -39,16 +39,22 @@ export function setStatus(db: Db, itemId: string, status: ItemStatus, snoozedUnt
   });
 }
 
-export function addTag(db: Db, itemId: string, name: string, color?: string): { id: string; name: string } {
+export function ensureTag(db: Db, name: string, color?: string): { id: string; name: string } {
   const clean = sanitizeText(name, 40);
   if (!clean) throw new RejectedPayload("tag name required");
+  const existing = db.prepare(`SELECT id, name FROM tags WHERE name = ? COLLATE NOCASE`).get(clean) as
+    | { id: string; name: string }
+    | undefined;
+  if (existing) return existing;
+  const tag = { id: newId(), name: clean };
+  db.prepare(`INSERT INTO tags (id, name, color) VALUES (?, ?, ?)`).run(tag.id, tag.name, color ?? null);
+  return tag;
+}
+
+export function addTag(db: Db, itemId: string, name: string, color?: string): { id: string; name: string } {
   return tx(db, () => {
     requireItem(db, itemId);
-    const existing = db.prepare(`SELECT id, name FROM tags WHERE name = ? COLLATE NOCASE`).get(clean) as
-      | { id: string; name: string }
-      | undefined;
-    const tag = existing ?? { id: newId(), name: clean };
-    if (!existing) db.prepare(`INSERT INTO tags (id, name, color) VALUES (?, ?, ?)`).run(tag.id, tag.name, color ?? null);
+    const tag = ensureTag(db, name, color);
     db.prepare(
       `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'tag', 'user', ?)`,
     ).run(itemId, tag.id, nowIso());
@@ -61,6 +67,7 @@ export function removeTag(db: Db, itemId: string, tagId: string): void {
     requireItem(db, itemId);
     requireTag(db, tagId);
     db.prepare(`DELETE FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'tag'`).run(itemId, tagId);
+    db.prepare(`DELETE FROM intake_tag_evidence WHERE item_id = ? AND tag_id = ?`).run(itemId, tagId);
   });
 }
 

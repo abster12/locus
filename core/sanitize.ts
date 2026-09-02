@@ -1,8 +1,8 @@
-const MAX_TITLE = 500;
-const MAX_BODY = 20_000;
-const MAX_HANDLE = 200;
-const MAX_URL = 2_000;
-const MAX_MEDIA = 8;
+export const MAX_TITLE = 500;
+export const MAX_BODY = 20_000;
+export const MAX_HANDLE = 200;
+export const MAX_URL = 2_000;
+export const MAX_MEDIA = 8;
 
 export class RejectedPayload extends Error {
   readonly code = "rejected-payload";

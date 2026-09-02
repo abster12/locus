@@ -31,6 +31,9 @@ type WebmcpWindow = {
 // wraps named functions from this file in a __name() helper that only exists
 // at module scope, so a serialized function callback would crash in the page.
 const FAKE_WEBMCP_RUNTIME = `
+  const tracked = new Set([
+    "get_recipe_source", "propose_recipe", "apply_tonight_changes", "get_tonight", "search_food_items",
+  ]);
   const tools = new Map();
   const regs = { count: 0 };
   window.__locusKitchenTools = tools;
@@ -38,9 +41,12 @@ const FAKE_WEBMCP_RUNTIME = `
   Object.defineProperty(document, "modelContext", {
     value: {
       registerTool(tool, options = {}) {
-        regs.count += 1;
-        tools.set(tool.name, tool);
-        const remove = () => tools.delete(tool.name);
+        const ours = tracked.has(tool.name);
+        if (ours) {
+          regs.count += 1;
+          tools.set(tool.name, tool);
+        }
+        const remove = () => { if (ours) tools.delete(tool.name); };
         if (options.signal?.aborted) remove();
         else options.signal?.addEventListener("abort", remove, { once: true });
         return Promise.resolve();
@@ -253,8 +259,9 @@ test("kitchen detail registers the two Recipe Document tools, proposes a grounde
       location.hash = "#/recent";
     });
     await page.waitForFunction(
-      () => ((window as unknown as WebmcpWindow).__locusKitchenTools?.size ?? -1) === 0,
+      (names: string[]) => names.every((name) => !(window as unknown as WebmcpWindow).__locusKitchenTools?.has(name)),
       { timeout: 5000 },
+      [...RECIPE_TOOLS, ...TONIGHT_TOOLS],
     );
   } finally {
     await browser.close();

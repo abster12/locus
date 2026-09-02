@@ -9,6 +9,10 @@ Local-first desk for personal social saves (X Bookmarks, Instagram Saved, YouTub
 - **Source collection** — that account’s Bookmarks / Saved / Watch Later. Not a user folder.
 - **Collection / tag / note** — how the user organizes Items.
 - **Library** — the private ownership scope for Items and Reading data. A localhost install has one fixed Library (`local`).
+- **Library Intake** — deliberate manual or agent-directed creation and organization of Items outside producer-owned source collection capture.
+- **Intake Draft** — a validated prospective Item plus proposed organization and classification evidence. It is not an Item until committed.
+- **Intake Context** — the bounded, versioned set of existing tags, Collections, semantic guidance, and request-specific classification instruction available to one Library intake operation.
+- **Intake Batch** — one atomic manual or agent-directed commit containing one or more Item drafts, requested memberships, provenance, context version, and client mutation id.
 - **Reading Candidate** — a normalized outbound URL or source body that may represent readable writing. Internal discovery state, not necessarily visible.
 - **Reading Document** — one canonical piece of writing in Reading, linked to one or more Items in the same Library. Not an Item, Collection, or clipping.
 - **provenance** — the Item or Items through which the user saved a Reading Document.
@@ -44,6 +48,7 @@ Local-first desk for personal social saves (X Bookmarks, Instagram Saved, YouTub
 - **Producer** — something that reads a site and sends posts to Locus. Two producers: the **extension** (your everyday Chrome) and the **runner** (a separate Chrome Locus opens).
 - **Capture Protocol** — the desk messages: start session → batches → finish. Producers send these. Site packs do not.
 - **Capture token** — revocable permission to send those messages.
+- **Library capability** — revocable permission for a chosen agent to call Library Intake over HTTP MCP when no Locus page is open. Distinct from a Capture token. Scopes are `library:read` and `library:write`.
 
 ## Site pack
 

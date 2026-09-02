@@ -1,7 +1,7 @@
 import type { Db } from "./open.ts";
 import { cleanupSourceConnections } from "./source-lifecycle.ts";
 
-export const SCHEMA_VERSION = 25;
+export const SCHEMA_VERSION = 29;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -92,6 +92,47 @@ CREATE TABLE IF NOT EXISTS activities (
   timestamp_source TEXT NOT NULL,
   capture_run_id TEXT
 );
+
+CREATE TABLE IF NOT EXISTS item_intake (
+  item_id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  actor TEXT NOT NULL CHECK (actor IN ('user', 'agent')),
+  created_at TEXT NOT NULL,
+  observed_json TEXT NOT NULL DEFAULT '[]',
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS intake_tag_evidence (
+  item_id TEXT NOT NULL,
+  tag_id TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  PRIMARY KEY (item_id, tag_id),
+  FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS intake_batches (
+  library_id TEXT NOT NULL,
+  client_mutation_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  actor TEXT NOT NULL CHECK (actor IN ('user', 'agent')),
+  created_at TEXT NOT NULL,
+  context_version TEXT,
+  instruction TEXT,
+  result_json TEXT NOT NULL,
+  PRIMARY KEY (library_id, client_mutation_id)
+);
+
+CREATE TABLE IF NOT EXISTS library_capabilities (
+  id TEXT PRIMARY KEY,
+  library_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL CHECK (scope IN ('library:read', 'library:write')),
+  label TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_library_capabilities_library ON library_capabilities(library_id, revoked_at);
 
 CREATE TABLE IF NOT EXISTS item_state (
   item_id TEXT PRIMARY KEY,
@@ -609,6 +650,10 @@ export function migrateSchema(db: Db): void {
     if (current < 23) migrateTripShareOwnerToken(db);
     if (current < 24) migrateTripShareHashOnly(db);
     if (current < 25) cleanupSourceConnections(db, { inTransaction: true });
+    if (current < 26) migrateItemIntake(db);
+    if (current < 27) migrateIntakeBatches(db);
+    if (current < 28) migrateIntakeAgentWrite(db);
+    if (current < 29) migrateLibraryCapabilities(db);
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");
@@ -620,6 +665,68 @@ export function migrateSchema(db: Db): void {
     }
     throw error;
   }
+}
+
+function migrateItemIntake(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS item_intake (
+      item_id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL,
+      actor TEXT NOT NULL CHECK (actor IN ('user', 'agent')),
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+function migrateIntakeBatches(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS intake_batches (
+      library_id TEXT NOT NULL,
+      client_mutation_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      actor TEXT NOT NULL CHECK (actor IN ('user', 'agent')),
+      created_at TEXT NOT NULL,
+      context_version TEXT,
+      instruction TEXT,
+      result_json TEXT NOT NULL,
+      PRIMARY KEY (library_id, client_mutation_id)
+    );
+  `);
+}
+
+function migrateIntakeAgentWrite(db: Db): void {
+  if (tableExists(db, "item_intake")) {
+    const columns = db.prepare(`PRAGMA table_info(item_intake)`).all() as { name: string }[];
+    if (!columns.some((column) => column.name === "observed_json")) {
+      db.exec(`ALTER TABLE item_intake ADD COLUMN observed_json TEXT NOT NULL DEFAULT '[]'`);
+    }
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS intake_tag_evidence (
+      item_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      rationale TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      PRIMARY KEY (item_id, tag_id),
+      FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
+  `);
+}
+
+function migrateLibraryCapabilities(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS library_capabilities (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      scope TEXT NOT NULL CHECK (scope IN ('library:read', 'library:write')),
+      label TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_library_capabilities_library ON library_capabilities(library_id, revoked_at);
+  `);
 }
 
 /** Additive Atlas analyzer state. Existing attempts are deliberately marked

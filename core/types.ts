@@ -4,7 +4,7 @@ export type ContentType = "post" | "thread" | "reel" | "video" | "comment" | "li
 
 export type ItemStatus = "inbox" | "accepted" | "snoozed" | "archived" | "rejected";
 
-export type ActivityKind = "imported" | "detected" | "captured" | "updated" | "source_removed";
+export type ActivityKind = "imported" | "detected" | "captured" | "updated" | "source_removed" | "added";
 
 export type Coverage = "complete" | "partial";
 

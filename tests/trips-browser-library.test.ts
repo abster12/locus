@@ -71,8 +71,6 @@ test("trips browser: add from Library, inspect details, and broken references st
     await page.keyboard.press("Enter");
     await page.waitForSelector(".trip-stop-dialog[open]", { timeout: 5000 });
     const facts = await page.$eval(".trip-stop-dialog[open] .trip-stop-facts", (el) => el.textContent ?? "");
-    assert.match(facts, /Source/);
-    assert.match(facts, /x/);
     assert.match(facts, /Open original/);
     const writesBeforeEscape = writes.length;
     await page.keyboard.press("Escape");

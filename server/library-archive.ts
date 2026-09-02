@@ -31,6 +31,11 @@ import {
   importAtlasRecords,
   type AtlasArchiveRecord,
 } from "./atlas/module.ts";
+import {
+  exportIntakeRecords,
+  importIntakeRecords,
+  type IntakeArchiveRecord,
+} from "./intake/module.ts";
 
 export const ARCHIVE_FORMAT = "locus-library";
 export const ARCHIVE_VERSION = 1;
@@ -49,11 +54,13 @@ const MAX_METADATA = 8_192;
 const EXCLUDED = [
   "meta",
   "capture_tokens",
+  "library_capabilities",
   "capture_sessions",
   "capture_batches",
   "capture_runs",
   "capture_seen",
   "link_previews",
+  "intake_batches",
 ] as const;
 
 const KINDS = [
@@ -77,6 +84,7 @@ const KINDS = [
   "kitchenTonightEntry",
   "atlasPlace",
   "atlasAssignment",
+  "itemIntake",
 ] as const;
 
 type Kind = (typeof KINDS)[number];
@@ -112,6 +120,7 @@ export function libraryIsEmpty(db: Db): boolean {
     "source_memberships",
     "summaries",
     "capture_tokens",
+    "library_capabilities",
     "capture_sessions",
     "capture_runs",
     "capture_batches",
@@ -133,7 +142,8 @@ export function writeLibraryArchive(
   const reading = exportReadingRecords(db, libraryId);
   const kitchen = exportKitchenRecords(db, libraryId);
   const atlas = exportAtlasRecords(db, libraryId);
-  const counts = archiveCounts(db, reading.counts, kitchen.counts, atlas.counts);
+  const intake = exportIntakeRecords(db, libraryId);
+  const counts = archiveCounts(db, reading.counts, kitchen.counts, atlas.counts, intake.counts);
   const fd = openSync(dest, "w");
   let bytes = 0;
   try {
@@ -154,7 +164,7 @@ export function writeLibraryArchive(
       counts,
       excluded: [...EXCLUDED, ...readingArchiveExcluded()],
     });
-    for (const record of iterateRecords(db, reading.records, kitchen.records, atlas.records)) write(record);
+    for (const record of iterateRecords(db, reading.records, kitchen.records, atlas.records, intake.records)) write(record);
     return bytes;
   } finally {
     closeSync(fd);
@@ -219,6 +229,7 @@ function archiveCounts(
   reading: ReadingArchiveCounts,
   kitchen: { kitchenRecipeDocument: number; kitchenTonightEntry: number },
   atlas: { atlasPlace: number; atlasAssignment: number },
+  intake: { itemIntake: number },
 ): Record<Kind, number> {
   return {
     sourceAccount: count(db, `SELECT COUNT(*) AS n FROM source_accounts`),
@@ -243,6 +254,7 @@ function archiveCounts(
     ...reading,
     ...kitchen,
     ...atlas,
+    ...intake,
   };
 }
 
@@ -251,6 +263,7 @@ function* iterateRecords(
   readingRecords: Iterable<ReadingArchiveRecord>,
   kitchenRecords: readonly KitchenArchiveRecord[],
   atlasRecords: readonly AtlasArchiveRecord[],
+  intakeRecords: readonly IntakeArchiveRecord[],
 ): Generator<Rec> {
   for (const row of all(db, `SELECT id, source, external_id, display_name, created_at FROM source_accounts`)) {
     yield {
@@ -375,6 +388,7 @@ function* iterateRecords(
   yield* kitchenRecords;
   yield* atlasRecords;
   yield* readingRecords;
+  yield* intakeRecords;
 }
 
 type Stage = DatabaseSync;
@@ -576,6 +590,11 @@ function insertStaged(db: Db, staged: Stage): void {
       typeof row.sourcePosition === "number" ? row.sourcePosition : null,
     );
   }
+  importIntakeRecords(db, {
+    records: kindRows(staged, "itemIntake"),
+    itemIds: uniqueIds(kindRows(staged, "item"), "id"),
+    tagIds: uniqueIds(kindRows(staged, "tag"), "id"),
+  });
   importKitchenRecords(db, {
     recipes: kindRows(staged, "kitchenRecipeDocument"),
     tonight: kindRows(staged, "kitchenTonightEntry"),
