@@ -633,9 +633,19 @@ textarea:focus { outline: none; border-color: var(--ink); }
   border-radius: 10px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--lift);
 }
 .source-state { margin: -4px 0 0; font-size: 11px; letter-spacing: .03em; }
-.source-state-imported { color: var(--mute); }
-.source-state-pending { color: var(--warn); }
-.source-state-connected, .source-state-runner, .source-state-extension { color: var(--ok); }
+.source-state-not-connected { color: var(--mute); }
+.source-state-connecting { color: var(--warn); }
+.source-state-connected, .source-state-capturing { color: var(--ok); }
+.source-state-needs-attention { color: var(--bad); }
+.source-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.source-more { position: relative; }
+.source-more > summary {
+  list-style: none; cursor: pointer; color: var(--mute);
+  padding: 6px 12px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+}
+.source-more > summary::-webkit-details-marker { display: none; }
+.source-pair-code { min-height: 4.5em; font-family: var(--mono); }
+#extension-setup label { display: grid; gap: 4px; font-size: 12px; color: var(--mute); }
 .bar { height: 4px; background: var(--wash); border-radius: 2px; overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--src); width: var(--w, 10%); }
 .banner { background: var(--card); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; margin: 14px 0; }
@@ -647,6 +657,10 @@ textarea:focus { outline: none; border-color: var(--ink); }
 .block { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; box-shadow: var(--lift); }
 .block h2 { font-family: var(--display); font-size: 24px; margin: 0 0 10px; }
 .block ul { margin: 0; padding-left: 18px; }
+.stack > h2 { font-family: var(--display); font-size: 24px; font-weight: 500; margin: 8px 0 0; }
+.account-danger { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule); }
+.account-import { margin-top: 12px; }
+.account-import > summary { cursor: pointer; }
 .cite { font-family: var(--mono); font-size: 12px; }
 
 .empty {

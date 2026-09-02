@@ -73,6 +73,26 @@ test("capture tokens cannot cross sessions or jobs", async () => {
     const allowedJob = await get(base, `/capture/v1/jobs/${job.id}`, wildcard);
     assert.equal(allowedJob.status, 200);
 
+    resetJobsForTest();
+    const grantA = issueToken(database, "x", "x-account-a");
+    const grantB = issueToken(database, "x", "x-account-b");
+    const jobA = enqueueJob("x", "x-account-a", grantA);
+    const jobB = enqueueJob("x", "x-account-b", grantB);
+    const foreignJob = await get(base, `/capture/v1/jobs/${jobB.id}`, grantA.token);
+    assert.equal(foreignJob.status, 403);
+    const ownJob = await get(base, `/capture/v1/jobs/${jobA.id}`, grantA.token);
+    assert.equal(ownJob.status, 200);
+    const foreignSession = await post(base, "/capture/v1/sessions", grantA.token, {
+      protocolVersion: 1,
+      source: "reddit",
+      producer: { id: "test", version: "1" },
+      accountExternalId: "reddit-user",
+      collection: { externalId: "saved", name: "Saved" },
+      mode: "incremental",
+      observedAt: new Date().toISOString(),
+    });
+    assert.equal(foreignSession.status, 403);
+
     database.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at) VALUES (?, ?, ?, ?, ?)`).run(
       "reddit-account",
       "reddit",

@@ -298,13 +298,7 @@ export const api = {
       `/api/summaries/${scope}/${encodeURIComponent(ref)}/prose`,
       { method: "POST", body: "{}" },
     ),
-  sources: () =>
-    req<{
-      sources: SourceGroup[];
-      settings: { refreshOnOpen: boolean };
-      pi: { available: boolean; detail: string };
-      extension: { alive: boolean };
-    }>("/api/sources"),
+  sources: () => req<AccountSourcesOverview>("/api/sources"),
   connect: (source: SourceId, accountId?: string) =>
     req<{ copy: string; via?: string }>(`/api/sources/${source}/connect`, { method: "POST", body: JSON.stringify({ accountId }) }),
   cancel: (source: SourceId, accountId: string) =>
@@ -313,8 +307,8 @@ export const api = {
     req(`/api/sources/${source}/resume`, { method: "POST", body: JSON.stringify({ accountId }) }),
   disconnect: (source: SourceId, accountId: string) =>
     req(`/api/sources/${source}/disconnect`, { method: "POST", body: JSON.stringify({ accountId }) }),
-  pairExtension: (source: SourceId) =>
-    req<{ token: string; origin: string }>(`/api/sources/${source}/pair-extension`, { method: "POST", body: "{}" }),
+  pairExtension: () =>
+    req<{ token: string; origin: string }>("/api/extension/pair", { method: "POST", body: "{}" }),
   settings: (refreshOnOpen: boolean) =>
     req("/api/settings", { method: "POST", body: JSON.stringify({ refreshOnOpen }) }),
   exportLibrary: async () => {
@@ -916,33 +910,70 @@ export interface SummarySnapshot {
   items: { id: string; title: string | null; url: string; source: string; authorHandle: string | null }[];
 }
 
-export interface SourceGroup {
+export interface ImportSummary {
+  id: string;
   source: SourceId;
   label: string;
-  accounts: SourceHealth[];
+  importedAt: string;
+  itemCount: number;
 }
 
-export interface SourceHealth {
+export type SourceConnectionState =
+  | "not_connected"
+  | "connecting"
+  | "connected"
+  | "capturing"
+  | "needs_attention";
+
+export type ExtensionHealthState = "not_paired" | "paired" | "needs_attention";
+
+export interface ExtensionHealth {
+  state: ExtensionHealthState;
+  lastSeenAt: string | null;
+}
+
+export interface SourceProgress {
+  phase: string;
+  seen: number;
+  upserted: number;
+  message: string;
+  errorCode?: string;
+  coverage?: string;
+  previewJpeg?: string;
+  pageUrl?: string;
+}
+
+export interface SourceRunSummary {
+  id: string;
+  status: string;
+  coverage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  seenCount: number;
+  upsertedCount: number;
+  errorCode: string | null;
+  recovery: string | null;
+}
+
+export interface SourceConnection {
   source: SourceId;
-  account: { id: string; externalId: string; displayName: string | null; state?: "imported" | "pending" | "runner" | "extension" | "connected" } | null;
-  running: boolean;
-  progress: {
-    phase: string;
-    seen: number;
-    upserted: number;
-    message: string;
-    errorCode?: string;
-    coverage?: string;
-    previewJpeg?: string;
-    pageUrl?: string;
+  label: string;
+  state: SourceConnectionState;
+  liveAccount: {
+    id: string;
+    externalId: string;
+    displayName: string | null;
   } | null;
-  lastRun: {
-    coverage: string | null;
-    status: string;
-    seenCount: number;
-    upsertedCount: number;
-    errorCode: string | null;
-    recovery: string | null;
-    coverageLabel: string;
-  } | null;
+  progress: SourceProgress | null;
+  latestAttempt: SourceRunSummary | null;
+  lastSuccessfulCapture: SourceRunSummary | null;
+}
+
+export interface AccountSourcesOverview {
+  account: { mode: "local" };
+  extension: ExtensionHealth;
+  connections: SourceConnection[];
+  imports: ImportSummary[];
+  preferences: { captureOnOpen: boolean };
+  pi: { available: boolean; detail: string };
 }

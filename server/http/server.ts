@@ -6,7 +6,8 @@ import { extname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import type { Db } from "../../db/open.ts";
-import { browserProfileDir, newId, nowIso } from "../../db/open.ts";
+import { browserProfileDir, newId, nowIso, tx } from "../../db/open.ts";
+import { isPendingExternalId, isPlaceholderDisplayName, releaseSourceConnection } from "../../db/source-lifecycle.ts";
 import {
   addNote,
   addTag,
@@ -20,7 +21,7 @@ import {
   setStatus,
 } from "../../core/commands.ts";
 import { buildSummary, getItem, itemCounts, listCollections, listItems, listItemsPage, listTags, wipeLibrary } from "../../core/library.ts";
-import { isItemStatus, isSourceId, recoveryText, type SourceId } from "../../core/types.ts";
+import { isItemStatus, isSourceId, recoveryText, SOURCES, type SourceId } from "../../core/types.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import { parseBatch, parseFinish, parseSession } from "../../packages/protocol/validate.ts";
 import {
@@ -32,18 +33,18 @@ import {
   issueToken,
   knownCompleteIds,
   lookupToken,
-  revokeTokensForAccount,
+  revokeTokenById,
   startSession,
 } from "../capture/ingest.ts";
 import { importJsonl } from "../import.ts";
 import { scheduleXEnrich } from "../enrich.ts";
 import { importRedditExport } from "../../importers/reddit-export/index.ts";
-import { cancelRunner, deleteProfile, getProgress, isRunning, markDone, markRunning, setProgress, startRunner } from "../../runner/index.ts";
-import { canAccessJob, cancelJobs, enqueueJob, extensionAlive, finishJob, getJob, heartbeat, waitJob } from "../capture/jobs.ts";
+import { cancelRunner, deleteProfile, getProgress, isRunning, markDone, markRunning, retargetRunner, setProgress, startRunner } from "../../runner/index.ts";
+import { canAccessJob, cancelJobs, enqueueJob, extensionAlive, extensionHealth, finishJob, getJob, heartbeat, jobDeliveryView, jobForTokenId, jobStatusView, retargetJobs, waitJob } from "../capture/jobs.ts";
 import { frameCheck, linkPreview } from "./preview.ts";
 import { applyTripChanges, archiveTrip, armReviewIntent, createTrip, deleteTrip, dismissTripAdvisory, duplicateTrip, findSharedSnapshot, getShareState, getTrip, getTripHistory, listTrips, previewShareSnapshot, publishShareSnapshot, redoTripChanges, removeTripInference, renameTrip, renderShareHtml, requireClientMutationId, restoreTrip, recordAgentReview, ReviewIntentError, revokeShareSnapshot, searchTripSources, TripConflict, undoTripChanges, updateTripSetup } from "../trips/facade.ts";
 import { filterCitations, type SummarySnapshotV1 } from "../../core/summaries.ts";
-import { classifySourceAccount } from "../source-state.ts";
+import { classifySourceAccount, pickConnectionAccount, sourceConnectionState } from "../source-state.ts";
 import {
   LOCAL_LIBRARY_ID,
   backfillReading,
@@ -745,10 +746,12 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
 
   on("GET", "/api/sources", async (_req, res) => {
     json(res, 200, {
-      sources: sourceOverview(db),
-      settings: { refreshOnOpen: getSetting(db, "refreshOnOpen") === "1" },
+      account: { mode: "local" },
+      extension: extensionHealth(),
+      connections: sourceOverview(db),
+      imports: importHistory(db),
+      preferences: { captureOnOpen: getSetting(db, "refreshOnOpen") === "1" },
       pi: await piStatus(),
-      extension: { alive: extensionAlive() },
     });
   });
 
@@ -775,11 +778,14 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!isSourceId(source)) return json(res, 400, { error: "unknown source" });
     const accountId = String(asRec(body).accountId ?? "");
     const account = lookupSourceAccount(db, source, accountId);
-    if (!account || account.accountKind === "imported") return json(res, 404, { error: "unknown source account" });
-    cancelRunner(source, accountId);
-    cancelJobs(source, accountId);
+    if (!account || account.accountKind !== "live") return json(res, 404, { error: "unknown source account" });
+    cancelExtensionCapture(db, source, accountId);
     const run = latestRun(db, source, accountId);
     if (run) cancelRun(db, run.id);
+    if (isPendingExternalId(account.external_id)) {
+      deleteProfile(source, accountId);
+      releaseSourceConnection(db, accountId);
+    }
     json(res, 200, { ok: true });
   });
 
@@ -789,10 +795,16 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const accountId = String(asRec(body).accountId ?? "");
     if (!accountId) return json(res, 400, { error: "accountId required" });
     const account = lookupSourceAccount(db, source, accountId);
-    if (!account || account.accountKind === "imported") return json(res, 404, { error: "unknown source account" });
-    cancelRunner(source, accountId);
-    revokeTokensForAccount(db, accountId);
+    if (!account || account.accountKind !== "live") return json(res, 404, { error: "unknown source account" });
+    // Device pairing is wildcard-scoped, so account-token revoke is not enough:
+    // cancel the job so the extension observes it, then revoke the job grant.
+    cancelExtensionCapture(db, source, accountId);
     deleteProfile(source, accountId);
+    tx(db, () => {
+      const run = latestRun(db, source, accountId);
+      if (run) cancelRun(db, run.id);
+      releaseSourceConnection(db, accountId);
+    });
     json(res, 200, { ok: true, profile: browserProfileDir(source, accountId) });
   });
 
@@ -804,11 +816,20 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     json(res, 200, { token, account, origin: `http://127.0.0.1:${port}` });
   });
 
+  on("POST", "/api/extension/pair", async (_req, res) => {
+    // Device-level pairing: one wildcard token for this desk, not a Source account.
+    const { token } = issueToken(db, "*", null);
+    json(res, 200, { token, origin: `http://127.0.0.1:${port}` });
+  });
+
   on("GET", "/api/sources/:source/health", async (_req, res, url, _body, params) => {
     const source = params.source ?? "";
     if (!isSourceId(source)) return json(res, 400, { error: "unknown source" });
     const accountId = url.searchParams.get("accountId") ?? undefined;
-    if (accountId && !lookupSourceAccount(db, source, accountId)) return json(res, 404, { error: "unknown source account" });
+    if (accountId) {
+      const account = lookupSourceAccount(db, source, accountId);
+      if (!account || account.accountKind !== "live") return json(res, 404, { error: "unknown source account" });
+    }
     json(res, 200, { health: sourceHealth(db, source, accountId) });
   });
 
@@ -853,7 +874,8 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
       res.writeHead(204).end();
       return;
     }
-    json(res, 200, { id: job.id, source: job.source, url: job.url });
+    // Deliver the job-bound ingest grant here only. GET /jobs/:id never includes it.
+    json(res, 200, jobDeliveryView(job));
   });
 
   on("GET", "/capture/v1/jobs/:id", async (req, res, _url, _body, params) => {
@@ -864,7 +886,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const job = getJob(params.id ?? "");
     if (!job) return json(res, 404, { error: "unknown job" });
     if (!canAccessJob(job, row)) return json(res, 403, { error: "token cannot access this job" });
-    json(res, 200, job);
+    json(res, 200, jobStatusView(job));
   });
 
   on("POST", "/capture/v1/jobs/:id/progress", async (req, res, _url, body, params) => {
@@ -895,6 +917,7 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     if (!job) return json(res, 404, { error: "unknown job" });
     if (!canAccessJob(job, row)) return json(res, 403, { error: "token cannot access this job" });
     finishJob(job.id);
+    if (job.tokenId) revokeTokenById(db, job.tokenId);
     const rec = asRec(body);
     setProgress(job.source, job.accountId, {
       phase: rec.error ? "error" : "done",
@@ -924,7 +947,15 @@ export function listen(db: Db): { port: number; close: () => Promise<void> } {
     const row = lookupToken(db, token);
     if (!row || row.revokedAt) return json(res, 401, { error: "invalid token" });
     const session = parseSession(body);
+    const grantJob = jobForTokenId(row.id);
+    if (grantJob?.status === "cancelled") return json(res, 403, { error: "job is cancelled" });
     const started = startSession(db, row, session);
+    // Job grant tokens are bound to the pending Source account. If ingest merged
+    // that row into the canonical live account, move running/job state with it.
+    if (row.sourceAccountId && started.sourceAccountId !== row.sourceAccountId && isSourceId(session.source)) {
+      retargetJobs(session.source, row.sourceAccountId, started.sourceAccountId);
+      retargetRunner(session.source, row.sourceAccountId, started.sourceAccountId);
+    }
     json(res, 200, started);
   });
 
@@ -1237,6 +1268,19 @@ async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {
   }
 }
 
+function queueExtensionJob(db: Db, source: SourceId, accountId: string): void {
+  markRunning(source, accountId);
+  // Delegated ingest grant: bound to this Source account, delivered on job wait.
+  enqueueJob(source, accountId, issueToken(db, source, accountId));
+}
+
+function cancelExtensionCapture(db: Db, source: SourceId, accountId: string): void {
+  cancelRunner(source, accountId);
+  for (const job of cancelJobs(source, accountId)) {
+    if (job.tokenId) revokeTokenById(db, job.tokenId);
+  }
+}
+
 async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body: unknown, port: number): Promise<void> {
   if (!isSourceId(sourceRaw)) {
     json(res, 400, { error: "unknown source" });
@@ -1252,8 +1296,7 @@ async function beginCapture(db: Db, res: ServerResponse, sourceRaw: string, body
     return;
   }
   if (extensionAlive()) {
-    markRunning(sourceRaw, account.id);
-    enqueueJob(sourceRaw, account.id);
+    queueExtensionJob(db, sourceRaw, account.id);
     setProgress(sourceRaw, account.id, {
       phase: "waiting-login",
       message: `Opening ${sourceLabel(sourceRaw)}…`,
@@ -1295,28 +1338,38 @@ function ensurePendingAccount(db: Db, source: SourceId, accountId?: string): { i
   if (accountId) {
     const row = lookupSourceAccount(db, source, accountId);
     if (!row || row.accountKind === "imported") throw new MissingResource("unknown source account");
+    if (row.accountKind === "disconnected") reviveAccount(db, row.id);
     return row;
   }
   const rows = db
-    .prepare(`SELECT id, source, external_id, account_kind FROM source_accounts WHERE source = ? AND account_kind <> 'imported' ORDER BY created_at DESC`)
-    .all(source) as { id: string; source: string; external_id: string; account_kind: "live" }[];
-  const reusable = rows.find((row) => {
-    const ext = String(row.external_id);
-    if (ext.startsWith("fixture:")) return false;
-    if (ext.startsWith("pending:")) return true;
-    return existsSync(browserProfileDir(source, row.id));
-  });
-  if (reusable) return reusable;
+    .prepare(
+      `SELECT id, source, external_id, account_kind FROM source_accounts WHERE source = ? ORDER BY created_at DESC`,
+    )
+    .all(source) as { id: string; source: string; external_id: string; account_kind: string }[];
+  const live = rows.filter((row) => row.account_kind === "live");
+  const resolved = live.find((row) => !isPendingExternalId(row.external_id));
+  if (resolved) return resolved;
+  const pending = live.find((row) => isPendingExternalId(row.external_id));
+  if (pending) return pending;
+  const disconnected = rows.find((row) => row.account_kind === "disconnected");
+  if (disconnected) {
+    reviveAccount(db, disconnected.id);
+    return disconnected;
+  }
   const id = newId();
   const external = `pending:${id}`;
   db.prepare(`INSERT INTO source_accounts (id, source, external_id, display_name, created_at, account_kind) VALUES (?, ?, ?, ?, ?, 'live')`).run(
     id,
     source,
     external,
-    sourceLabel(source),
+    null,
     nowIso(),
   );
   return { id, source, external_id: external };
+}
+
+function reviveAccount(db: Db, accountId: string): void {
+  db.prepare(`UPDATE source_accounts SET account_kind = 'live' WHERE id = ? AND account_kind = 'disconnected'`).run(accountId);
 }
 
 function latestRun(db: Db, source: SourceId, accountId: string): { id: string } | null {
@@ -1325,7 +1378,8 @@ function latestRun(db: Db, source: SourceId, accountId: string): { id: string } 
       `SELECT r.id FROM capture_runs r
        JOIN source_collections c ON c.id = r.source_collection_id
        JOIN source_accounts a ON a.id = c.source_account_id
-       WHERE c.source_account_id = ? AND a.source = ? ORDER BY r.started_at DESC LIMIT 1`,
+       WHERE c.source_account_id = ? AND a.source = ? AND r.finished_at IS NULL
+       ORDER BY r.started_at DESC LIMIT 1`,
     )
     .get(accountId, source) as { id: string } | undefined;
   return row ?? null;
@@ -1335,33 +1389,152 @@ export function lookupSourceAccount(
   db: Db,
   source: SourceId,
   accountId: string,
-): { id: string; source: string; external_id: string; accountKind: "live" | "imported" } | undefined {
+): { id: string; source: string; external_id: string; accountKind: "live" | "imported" | "disconnected" } | undefined {
   return db
     .prepare(`SELECT id, source, external_id, account_kind as accountKind FROM source_accounts WHERE id = ? AND source = ?`)
-    .get(accountId, source) as { id: string; source: string; external_id: string; accountKind: "live" | "imported" } | undefined;
+    .get(accountId, source) as { id: string; source: string; external_id: string; accountKind: "live" | "imported" | "disconnected" } | undefined;
 }
 
 function sourceOverview(db: Db) {
-  const sources: SourceId[] = ["x", "instagram", "youtube", "reddit"];
-  return sources.map((source) => ({
+  return SOURCES.map((source) => sourceConnection(db, source));
+}
+
+function sourceConnection(db: Db, source: SourceId) {
+  const chosen = pickConnectionAccount(sourceAccounts(db, source));
+  if (!chosen) {
+    return {
+      source,
+      label: sourceLabel(source),
+      state: "not_connected" as const,
+      liveAccount: null,
+      progress: null,
+      latestAttempt: null,
+      lastSuccessfulCapture: null,
+    };
+  }
+  const latestAttempt = captureRunSummary(db, chosen.id, "latest");
+  const lastSuccessfulCapture = captureRunSummary(db, chosen.id, "successful");
+  const running = isRunning(source, chosen.id);
+  const live = getProgress(source, chosen.id);
+  const pending = isPendingExternalId(chosen.externalId);
+  return {
     source,
     label: sourceLabel(source),
-    accounts: (
-      db
-        .prepare(`SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind FROM source_accounts WHERE source = ?`)
-        .all(source) as { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" }[]
-    ).map((account) => sourceHealth(db, source, account.id)),
-  }));
+    state: sourceConnectionState({
+      hasLiveAccount: chosen.accountKind === "live",
+      pending,
+      running,
+      hasRecovery: Boolean(latestAttempt?.errorCode),
+    }),
+    liveAccount: {
+      id: chosen.id,
+      externalId: chosen.externalId,
+      displayName: isPlaceholderDisplayName(chosen.displayName) ? null : chosen.displayName,
+    },
+    progress: running ? live ?? null : null,
+    latestAttempt,
+    lastSuccessfulCapture,
+  };
+}
+
+type CaptureRunRow = {
+  id: string;
+  status: string;
+  coverage: string | null;
+  started_at: string;
+  finished_at: string | null;
+  seen_count: number;
+  upserted_count: number;
+  error_code: string | null;
+};
+
+function captureRunSummary(db: Db, accountId: string, which: "latest" | "successful") {
+  const row = (
+    which === "successful"
+      ? db.prepare(
+          `SELECT r.id, r.status, r.coverage, r.started_at, r.finished_at, r.seen_count, r.upserted_count, r.error_code
+             FROM capture_runs r
+             JOIN source_collections c ON c.id = r.source_collection_id
+            WHERE c.source_account_id = ?
+              AND r.finished_at IS NOT NULL
+              AND r.error_code IS NULL
+              AND r.status IN ('ok', 'complete')
+            ORDER BY r.finished_at DESC LIMIT 1`,
+        )
+      : db.prepare(
+          `SELECT r.id, r.status, r.coverage, r.started_at, r.finished_at, r.seen_count, r.upserted_count, r.error_code
+             FROM capture_runs r
+             JOIN source_collections c ON c.id = r.source_collection_id
+            WHERE c.source_account_id = ?
+            ORDER BY r.started_at DESC LIMIT 1`,
+        )
+  ).get(accountId) as CaptureRunRow | undefined;
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    coverage: row.coverage,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    seenCount: row.seen_count,
+    upsertedCount: row.upserted_count,
+    errorCode: row.error_code,
+    recovery: row.error_code ? recoveryTextSafe(row.error_code) : null,
+  };
+}
+
+function importHistory(db: Db) {
+  const rows = db
+    .prepare(
+      `SELECT a.id AS id, a.source AS source,
+              COALESCE(
+                (SELECT MAX(r.started_at)
+                   FROM source_collections c
+                   JOIN capture_runs r ON r.source_collection_id = c.id
+                  WHERE c.source_account_id = a.id),
+                a.created_at
+              ) AS importedAt,
+              (SELECT COUNT(DISTINCT sr.item_id)
+                 FROM source_records sr
+                 JOIN items i ON i.id = sr.item_id
+                WHERE sr.source_account_id = a.id) AS itemCount
+         FROM source_accounts a
+        WHERE a.account_kind = 'imported'
+        ORDER BY importedAt DESC, a.id`,
+    )
+    .all() as { id: string; source: string; importedAt: string; itemCount: number }[];
+  return rows.flatMap((row) => {
+    if (!isSourceId(row.source)) return [];
+    return [{
+      id: row.id,
+      source: row.source,
+      label: `${sourceLabel(row.source)} export`,
+      importedAt: row.importedAt,
+      itemCount: Number(row.itemCount),
+    }];
+  });
+}
+
+function sourceAccounts(db: Db, source: SourceId) {
+  return db
+    .prepare(
+      `SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind, created_at as createdAt FROM source_accounts WHERE source = ?`,
+    )
+    .all(source) as {
+      id: string;
+      externalId: string;
+      displayName: string | null;
+      accountKind: "live" | "imported" | "disconnected";
+      createdAt: string;
+    }[];
 }
 
 function sourceHealth(db: Db, source: SourceId, accountId?: string) {
   const account = accountId
     ? (db.prepare(`SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind FROM source_accounts WHERE id = ? AND source = ?`).get(accountId, source) as
-        | { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" }
+        | { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" | "disconnected" }
         | undefined)
-    : (db.prepare(`SELECT id, external_id as externalId, display_name as displayName, account_kind as accountKind FROM source_accounts WHERE source = ? ORDER BY created_at DESC LIMIT 1`).get(source) as
-        | { id: string; externalId: string; displayName: string | null; accountKind: "live" | "imported" }
-        | undefined);
+    : pickConnectionAccount(sourceAccounts(db, source));
   const run = account
     ? (db
         .prepare(
@@ -1395,11 +1568,18 @@ function sourceHealth(db: Db, source: SourceId, accountId?: string) {
         runnerProfileExists: existsSync(browserProfileDir(source, account.id)),
       })
     : null;
+  const connectionState = sourceConnectionState({
+    hasLiveAccount: Boolean(account && account.accountKind === "live"),
+    pending: state === "pending",
+    running,
+    hasRecovery: Boolean(run?.error_code),
+  });
   return {
     source,
     account: account ? { ...account, state } : null,
     running,
     progress: live ?? null,
+    connectionState,
     lastRun: run
       ? {
           id: run.id,
@@ -1420,10 +1600,10 @@ function sourceHealth(db: Db, source: SourceId, accountId?: string) {
 }
 
 function coverageLabel(coverage: string | null, status: string): string {
-  if (status === "running") return "Refresh in progress.";
-  if (coverage === "complete") return "Last refresh complete.";
-  if (coverage === "partial") return "Last refresh was partial.";
-  return "Not refreshed yet.";
+  if (status === "running") return "Capture in progress.";
+  if (coverage === "complete") return "Last capture complete.";
+  if (coverage === "partial") return "Last capture was partial.";
+  return "Not captured yet.";
 }
 
 function recoveryTextSafe(code: string): string | null {
@@ -1436,14 +1616,13 @@ function recoveryTextSafe(code: string): string | null {
 
 function refreshOnOpen(db: Db, port: number): void {
   const accounts = db
-    .prepare(`SELECT id, source FROM source_accounts WHERE account_kind <> 'imported' AND external_id NOT LIKE 'pending:%'`)
+    .prepare(`SELECT id, source FROM source_accounts WHERE account_kind = 'live' AND external_id NOT LIKE 'pending:%'`)
     .all() as { id: string; source: string }[];
   for (const account of accounts) {
     if (!isSourceId(account.source)) continue;
     if (isRunning(account.source, account.id)) continue;
     if (extensionAlive()) {
-      markRunning(account.source, account.id);
-      enqueueJob(account.source, account.id);
+      queueExtensionJob(db, account.source, account.id);
       setProgress(account.source, account.id, {
         phase: "waiting-login",
         message: `Opening ${sourceLabel(account.source)}…`,

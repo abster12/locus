@@ -24,6 +24,8 @@ export interface RunnerProgress {
 export interface RunnerHandle {
   abort: AbortController;
   promise: Promise<void>;
+  /** Authoritative active-map key. Retargeting updates this so settlement drops the live entry. */
+  key: string;
 }
 
 const active = new Map<string, RunnerHandle>();
@@ -31,6 +33,10 @@ const progress = new Map<string, RunnerProgress>();
 
 export function runnerKey(source: SourceId, accountId: string): string {
   return `${source}:${accountId}`;
+}
+
+function dropHandle(handle: RunnerHandle): void {
+  if (active.get(handle.key) === handle) active.delete(handle.key);
 }
 
 export function getProgress(source: SourceId, accountId: string): RunnerProgress | undefined {
@@ -53,21 +59,41 @@ export function markRunning(source: SourceId, accountId: string): AbortControlle
   const existing = active.get(key);
   if (existing) return existing.abort;
   const abort = new AbortController();
-  let settle: () => void = () => {};
-  const promise = new Promise<void>((resolve) => {
-    settle = resolve;
-  }).finally(() => {
-    active.delete(key);
-  });
-  abort.signal.addEventListener("abort", settle, { once: true });
-  active.set(key, { abort, promise });
+  const handle: RunnerHandle = { abort, promise: Promise.resolve(), key };
+  handle.promise = new Promise<void>((resolve) => {
+    abort.signal.addEventListener("abort", () => resolve(), { once: true });
+  }).finally(() => dropHandle(handle));
+  active.set(key, handle);
   return abort;
 }
 
-export function markDone(source: SourceId, accountId: string): void {
+export function markDone(source: SourceId, accountId: string): Promise<void> {
   const handle = active.get(runnerKey(source, accountId));
-  if (!handle) return;
+  if (!handle) return Promise.resolve();
   handle.abort.abort();
+  return handle.promise;
+}
+
+export function retargetRunner(source: SourceId, fromAccountId: string, toAccountId: string): void {
+  if (fromAccountId === toAccountId) return;
+  const from = runnerKey(source, fromAccountId);
+  const to = runnerKey(source, toAccountId);
+  const handle = active.get(from);
+  if (handle) {
+    const dest = active.get(to);
+    active.delete(from);
+    if (dest && dest !== handle) {
+      handle.abort.abort();
+    } else {
+      handle.key = to;
+      active.set(to, handle);
+    }
+  }
+  const prev = progress.get(from);
+  if (prev) {
+    progress.delete(from);
+    progress.set(to, { ...prev, accountId: toAccountId });
+  }
 }
 
 export function setProgress(
@@ -107,10 +133,8 @@ export function startRunner(args: {
   const existing = active.get(key);
   if (existing) return existing;
   const abort = new AbortController();
-  const promise = run(args, abort.signal).finally(() => {
-    active.delete(key);
-  });
-  const handle = { abort, promise };
+  const handle: RunnerHandle = { abort, promise: Promise.resolve(), key };
+  handle.promise = run(args, abort.signal, handle).finally(() => dropHandle(handle));
   active.set(key, handle);
   return handle;
 }
@@ -124,14 +148,15 @@ async function run(
     extraPlaylists?: { id: string; name: string; url: string }[];
   },
   signal: AbortSignal,
+  handle: RunnerHandle,
 ): Promise<void> {
-  const key = runnerKey(args.source, args.accountId);
   const pack = packFor(args.source);
   const set = (next: Partial<RunnerProgress> & Pick<RunnerProgress, "phase" | "message">) => {
+    const key = handle.key;
     const prev = progress.get(key);
     progress.set(key, {
       source: args.source,
-      accountId: args.accountId,
+      accountId: key.slice(args.source.length + 1),
       seen: prev?.seen ?? 0,
       upserted: prev?.upserted ?? 0,
       ...next,

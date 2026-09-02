@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Db } from "../../db/open.ts";
 import { newId, nowIso, tx } from "../../db/open.ts";
+import { mergeSourceAccount, resolvedAccountDisplayName } from "../../db/source-lifecycle.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
 import type { SourceId } from "../../core/types.ts";
 import type { CaptureBatchV1, CaptureFinishV1, CaptureSessionV1 } from "../../packages/protocol/types.ts";
@@ -113,17 +114,35 @@ function ensureAccount(
   accountKind: SourceAccountKind,
 ): string {
   if (boundAccountId) {
-    const existing = db.prepare(`SELECT id, source, external_id, account_kind FROM source_accounts WHERE id = ?`).get(boundAccountId) as
-      | { id: string; source: string; external_id: string; account_kind: SourceAccountKind }
+    const existing = db.prepare(`SELECT id, source, external_id, display_name AS displayName, account_kind FROM source_accounts WHERE id = ?`).get(boundAccountId) as
+      | { id: string; source: string; external_id: string; displayName: string | null; account_kind: SourceAccountKind }
       | undefined;
     if (!existing) throw new CaptureAuthorizationError(403, "token is bound to a missing account");
     if (existing.source !== source) throw new CaptureAuthorizationError(403, "token is not valid for this source account");
     if (existing.account_kind !== accountKind) throw new CaptureAuthorizationError(403, "token is not valid for this source account kind");
     if (isPlaceholderAccount(existing.external_id)) {
       if (!isPlaceholderAccount(externalId)) {
-        db.prepare(`UPDATE source_accounts SET external_id = ?, display_name = COALESCE(display_name, ?) WHERE id = ?`).run(
+        const collision = db
+          .prepare(
+            `SELECT id, account_kind AS accountKind, display_name AS displayName FROM source_accounts
+              WHERE source = ? AND external_id = ? AND id != ? AND account_kind != 'imported'`,
+          )
+          .get(source, externalId, existing.id) as { id: string; accountKind: string; displayName: string | null } | undefined;
+        if (collision) {
+          if (collision.accountKind === "disconnected") {
+            db.prepare(`UPDATE source_accounts SET account_kind = 'live' WHERE id = ?`).run(collision.id);
+          }
+          mergeSourceAccount(db, existing.id, collision.id, "repoint");
+          db.prepare(`UPDATE source_accounts SET display_name = ? WHERE id = ?`).run(
+            resolvedAccountDisplayName(collision.displayName, externalId),
+            collision.id,
+          );
+          db.prepare(`DELETE FROM source_accounts WHERE id = ?`).run(existing.id);
+          return collision.id;
+        }
+        db.prepare(`UPDATE source_accounts SET external_id = ?, display_name = ? WHERE id = ?`).run(
           externalId,
-          externalId,
+          resolvedAccountDisplayName(existing.displayName, externalId),
           existing.id,
         );
       }
@@ -141,7 +160,7 @@ function ensureAccount(
     id,
     source,
     externalId,
-    externalId,
+    resolvedAccountDisplayName(null, externalId),
     nowIso(),
     accountKind,
   );
@@ -174,7 +193,7 @@ export function startSession(
   token: Pick<CaptureToken, "id" | "source" | "sourceAccountId">,
   session: CaptureSessionV1,
   opts?: { accountKind?: SourceAccountKind },
-): { sessionId: string; captureRunId: string } {
+): { sessionId: string; captureRunId: string; sourceAccountId: string } {
   const sessionSource = session.source.startsWith("custom:") ? session.source : session.source;
   if (token.source !== "*" && token.source !== sessionSource) {
     throw new CaptureAuthorizationError(403, "token is not valid for this source");
@@ -216,7 +235,7 @@ export function startSession(
       session.accountExternalId,
       session.collection.externalId,
     );
-    return { sessionId, captureRunId };
+    return { sessionId, captureRunId, sourceAccountId: accountId };
   });
 }
 

@@ -26,7 +26,7 @@ type Route =
   | { name: "search"; q: string }
   | { name: "collections" }
   | { name: "collection"; id: string }
-  | { name: "sources" }
+  | { name: "account" }
   | { name: "reading" }
   | { name: "atlas" }
   | { name: "kitchen" }
@@ -48,7 +48,7 @@ function parseHash(): Route {
   if (a === "search") return { name: "search", q: q.get("q") || "" };
   if (a === "collections" && b) return { name: "collection", id: b };
   if (a === "collections") return { name: "collections" };
-  if (a === "sources") return { name: "sources" };
+  if (a === "account") return { name: "account" };
   // Reading is an index only. Ignore any stale/native-reader document segment
   // so `#/reading/:id` renders the ordinary index and shell chrome.
   if (a === "reading") return { name: "reading" };
@@ -362,8 +362,8 @@ export function App() {
         <Tab href="#/reading" active={route.name === "reading"}>
           Reading
         </Tab>
-        <Tab href="#/sources" active={route.name === "sources"}>
-          Sources
+        <Tab href="#/account" active={route.name === "account"}>
+          Account
         </Tab>
       </nav>
       {route.name === "recent" && <ItemList view="recent" initialShelf={route.shelf} onOpen={openStage} />}
@@ -371,7 +371,7 @@ export function App() {
       {route.name === "search" && <ItemList view="search" initialQ={route.q} onOpen={openStage} />}
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
-      {route.name === "sources" && <SourcesPage />}
+      {route.name === "account" && <SourcesPage />}
       {route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
       {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {route.name === "kitchen" && <KitchenPage />}
@@ -404,9 +404,9 @@ function CaptureBanner() {
     async function tick() {
       try {
         const d = await api.sources();
-        const waiting = d.sources.flatMap((g) => g.accounts).find((a) => a.running && a.progress?.phase === "waiting-login");
+        const waiting = d.connections.find((connection) => connection.state === "capturing" && connection.progress?.phase === "waiting-login");
         if (!alive) return;
-        setLine(waiting ? waiting.progress?.message ?? null : null);
+        setLine(waiting?.progress?.message ?? null);
       } catch {
         if (alive) setLine(null);
       }
@@ -421,7 +421,7 @@ function CaptureBanner() {
   if (!line) return null;
   return (
     <div className="banner">
-      {line} <a href="#/sources">Open Sources</a> to continue.
+      {line} <a href="#/account">Open Account</a> to continue.
     </div>
   );
 }
@@ -509,7 +509,7 @@ function NewMenu() {
             <b>Plan a trip</b>
             <small>Create a durable Trip Document.</small>
           </a>
-          <a role="menuitem" href="#/sources" onClick={() => setOpen(false)}>
+          <a role="menuitem" href="#/account" onClick={() => setOpen(false)}>
             <b>Save a link</b>
             <small>Capture an Item; readable sources appear in Reading.</small>
           </a>

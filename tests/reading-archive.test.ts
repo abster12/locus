@@ -336,11 +336,11 @@ test("JSONL capture import does not restore Reading snapshots", () => {
   db.close();
 });
 
-test("Sources export downloads ndjson and restore uploads the raw archive", () => {
+test("Account export downloads ndjson and restore uploads the raw archive", () => {
   const src = readFileSync(new URL("../app/src/SourcesPage.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(src, /JSON\.stringify\(lib/);
   assert.match(src, /importLibrary/);
-  assert.match(src, /Restore archive file/);
+  assert.match(src, /Restore from archive/);
   assert.match(src, /Restore requires an empty library/);
   const api = readFileSync(new URL("../app/src/api.ts", import.meta.url), "utf8");
   assert.match(api, /\/api\/library\/import/);

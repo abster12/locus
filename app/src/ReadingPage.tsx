@@ -468,7 +468,7 @@ function ReadingIndexView({ libraryIdentity }: { libraryIdentity: string }) {
         {emptyLibrary ? (
           <p className="empty">
             No readable links yet. Articles linked from future captures will appear here.{" "}
-            <a href="#/recent">Desk</a> · <a href="#/sources">Sources</a>
+            <a href="#/recent">Desk</a> · <a href="#/account">Account</a>
           </p>
         ) : null}
         {queueCleared ? (

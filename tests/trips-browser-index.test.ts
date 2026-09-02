@@ -37,7 +37,7 @@ test("trips browser: nav, + New menu, routes, no mutation", async () => {
     const tabs = await page.$$eval(".tabs a", (els) => els.map((el) => ({ href: el.getAttribute("href"), label: (el.textContent ?? "").trim() })));
     assert.deepEqual(
       tabs.map((tab) => tab.href),
-      ["#/recent", "#/kitchen", "#/atlas", "#/trips", "#/reading", "#/sources"],
+      ["#/recent", "#/kitchen", "#/atlas", "#/trips", "#/reading", "#/account"],
     );
     assert.ok(tabs.some((tab) => tab.label.startsWith("Trips")));
     assert.equal(await current("#/recent"), "page");
@@ -96,7 +96,7 @@ test("trips browser: nav, + New menu, routes, no mutation", async () => {
     );
     assert.deepEqual(items, [
       { href: "#/trips/new", label: "Plan a trip" },
-      { href: "#/sources", label: "Save a link" },
+      { href: "#/account", label: "Save a link" },
       { href: "#/kitchen", label: "Make a saved dish cookable" },
     ]);
     assert.equal(
@@ -121,9 +121,9 @@ test("trips browser: nav, + New menu, routes, no mutation", async () => {
     await page.waitForFunction(() => document.activeElement?.getAttribute("href") === "#/trips/new", { timeout: 5000 });
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
-    await waitPage("#/sources", "#/sources");
+    await waitPage("#/account", "#/account");
     await page.waitForFunction(() => document.querySelector(".new-menu") === null, { timeout: 5000 });
-    assert.equal(await current("#/sources"), "page");
+    assert.equal(await current("#/account"), "page");
 
     await page.click(".new-btn");
     await page.waitForSelector(".new-menu", { timeout: 5000 });

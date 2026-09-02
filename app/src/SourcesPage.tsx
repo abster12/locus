@@ -1,11 +1,82 @@
 import { useEffect, useState } from "react";
-import { api, type ImportResult, type SourceGroup, type SourceHealth, type SourceId } from "./api.ts";
-import { sourceLabel } from "./source-icons.ts";
+import { api, type ExtensionHealth, type ImportResult, type ImportSummary, type SourceConnection, type SourceConnectionState } from "./api.ts";
 import { SourceMark } from "./SourceMark.tsx";
 import { notifyLibraryChanged } from "./library-events.ts";
+
+const CONNECTION_UI: Record<SourceConnectionState, { status: string; primary: string; secondary: string | null }> = {
+  not_connected: { status: "Not connected", primary: "Connect", secondary: null },
+  connecting: { status: "Connecting", primary: "Continue setup", secondary: "Cancel setup" },
+  connected: { status: "Connected", primary: "Capture now", secondary: "Disconnect" },
+  capturing: { status: "Capturing", primary: "View progress", secondary: "Stop capture" },
+  needs_attention: { status: "Needs attention", primary: "Resolve issue", secondary: "Disconnect" },
+};
+
+function isPlaceholderHandle(value: string): boolean {
+  const name = value.trim();
+  return !name || name === "pending" || name.startsWith("pending:") || /^(x|instagram|youtube|reddit|unknown|extension)$/i.test(name);
+}
+
+function liveHandle(connection: SourceConnection): string | null {
+  if (connection.state !== "connected" && connection.state !== "capturing" && connection.state !== "needs_attention") return null;
+  const account = connection.liveAccount;
+  if (!account) return null;
+  for (const value of [account.displayName, account.externalId]) {
+    const handle = value?.trim() ?? "";
+    if (handle && !isPlaceholderHandle(handle)) return handle;
+  }
+  return null;
+}
+
+function formatImportDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-GB", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" });
+}
+
+function formatWhen(iso: string, verb: "captured" | "seen", now = Date.now()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return `Last ${verb} ${iso}`;
+  const delta = now - t;
+  if (delta < 0 || delta >= 24 * 60 * 60 * 1000) return `Last ${verb} ${formatImportDay(iso)}`;
+  const minutes = Math.floor(delta / 60_000);
+  if (minutes < 1) return `Last ${verb} just now`;
+  if (minutes < 60) return `Last ${verb} ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `Last ${verb} ${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
+function extensionStatus(extension: ExtensionHealth): string {
+  if (extension.state === "paired") return "Paired";
+  if (extension.state === "needs_attention") return "Needs attention";
+  return "Not paired";
+}
+
+function importHistoryLine(entry: ImportSummary): string {
+  const items = `${entry.itemCount} ${entry.itemCount === 1 ? "Item" : "Items"}`;
+  return `${entry.label} · ${items} · ${formatImportDay(entry.importedAt)}`;
+}
+
+function nextStep(state: SourceConnectionState): string {
+  switch (state) {
+    case "not_connected":
+      return "Connect this Source to try again.";
+    case "connecting":
+      return "Continue setup, or cancel it.";
+    case "connected":
+      return "Try Capture now again.";
+    case "capturing":
+      return "View progress, or stop capture.";
+    case "needs_attention":
+      return "Resolve the issue, then try again.";
+  }
+}
+
 export function SourcesPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof api.sources>> | null>(null);
-  const [pair, setPair] = useState<{ text: string; source: SourceId } | null>(null);
+  const [pair, setPair] = useState<{ origin: string; token: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const [pairBusy, setPairBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -27,79 +98,137 @@ export function SourcesPage() {
     return () => clearInterval(t);
   }, []);
 
-  if (!data) return <p className="quiet">Loading sources…</p>;
+  if (!data) return <p className="quiet">Loading account…</p>;
+
+  const pairingText = pair ? `${pair.origin}\n${pair.token}` : "";
+
+  async function pairExtension() {
+    if (pairBusy) return;
+    setPairBusy(true);
+    setPairError(null);
+    setCopied(false);
+    try {
+      setPair(await api.pairExtension());
+    } catch (e) {
+      setPairError(`${e instanceof Error ? e.message : String(e)} Copy the pairing code once it appears, then paste it into the extension.`);
+    } finally {
+      setPairBusy(false);
+    }
+  }
 
   return (
     <section className="stack">
-      <p className="quiet">Connect an account to bring in your saves.</p>
       {msg && <div className="banner">{msg}</div>}
       {pageError ? <p className="action-error" role="alert">{pageError}</p> : null}
-      <div className="source-grid">
-        {data.sources.map((g) => {
-          const shown = g.accounts.length > 0
-            ? g.accounts
-            : [
-                {
-                  source: g.source,
-                  account: null,
-                  running: false,
-                  progress: null,
-                  lastRun: null,
-                } satisfies SourceHealth,
-              ];
-          return shown.map((health, i) => (
-            <SourceCard
-              key={`${g.source}-${health.account?.id ?? i}`}
-              group={g}
-              health={health}
-              extensionAlive={data.extension.alive}
-              onConnect={async () => {
-                const state = sourceAccountState(health);
-                const r = await api.connect(g.source, state === "connected" || state === "runner" || state === "extension" ? health.account?.id : undefined);
-                setMsg(r.copy);
-                notifyLibraryChanged();
-                await reload();
+
+      <div className="pagehead">
+        <h1>Account</h1>
+      </div>
+
+      <div className="block" id="local-account">
+        <h2>Account</h2>
+        <h3>Local account</h3>
+        <p className="quiet">Your Library is stored on this device.</p>
+      </div>
+
+      <h2>Capture setup</h2>
+      <p className="quiet">Bring saves into Locus from the browser extension and your Sources.</p>
+
+      <div className="block" id="extension-setup">
+        <h3>Browser extension</h3>
+        <p role="status">{extensionStatus(data.extension)}</p>
+        {data.extension.lastSeenAt ? <p>{formatWhen(data.extension.lastSeenAt, "seen")}</p> : null}
+        <div className="source-actions">
+          {data.extension.state === "not_paired" ? (
+            <button type="button" className="btn primary" disabled={pairBusy} onClick={() => void pairExtension()}>
+              Pair extension
+            </button>
+          ) : data.extension.state === "needs_attention" ? (
+            <button type="button" className="btn primary" disabled={pairBusy} onClick={() => void pairExtension()}>
+              Pair another browser
+            </button>
+          ) : (
+            <button type="button" className="btn" disabled={pairBusy} onClick={() => void pairExtension()}>
+              Pair another browser
+            </button>
+          )}
+        </div>
+        {pair ? (
+          <>
+            <label htmlFor="pairing-code">Pairing code</label>
+            <textarea id="pairing-code" className="source-pair-code" readOnly value={pairingText} />
+            <button
+              type="button"
+              className="btn"
+              id="copy-pairing-code"
+              onClick={() => {
+                const copiedCode = () => setCopied(true);
+                const failed = () => setPairError("Copy failed. Select the pairing code and copy it yourself.");
+                const fallback = () => {
+                  const field = document.getElementById("pairing-code");
+                  if (field instanceof HTMLTextAreaElement) field.select();
+                  if (document.execCommand("copy")) copiedCode();
+                  else failed();
+                };
+                try {
+                  void navigator.clipboard.writeText(pairingText).then(copiedCode, fallback);
+                } catch {
+                  fallback();
+                }
               }}
-              onCancel={() => health.account ? api.cancel(g.source, health.account.id).then(() => { notifyLibraryChanged(); return reload(); }) : undefined}
-              onResume={() => health.account ? api.resume(g.source, health.account.id).then(reload) : undefined}
+            >
+              Copy pairing code
+            </button>
+            <p role="status">{copied ? "Copied pairing code." : ""}</p>
+          </>
+        ) : null}
+        {pairError ? <p className="action-error" role="alert">{pairError}</p> : null}
+      </div>
+
+      <h3>Sources</h3>
+      <p className="quiet">Connect the places where you save things. Locus keeps captured Items when a Source is disconnected.</p>
+      <div className="source-grid">
+        {data.connections.map((connection) => {
+          const accountId = connection.liveAccount?.id;
+          return (
+            <SourceCard
+              key={connection.source}
+              connection={connection}
+              onStart={() =>
+                api.connect(connection.source, connection.state === "not_connected" ? undefined : accountId).then(() => {
+                  notifyLibraryChanged();
+                  return reload();
+                })
+              }
+              onResolve={() =>
+                accountId ? api.resume(connection.source, accountId).then(() => { notifyLibraryChanged(); return reload(); }) : undefined
+              }
+              onCancel={() =>
+                accountId ? api.cancel(connection.source, accountId).then(() => { notifyLibraryChanged(); return reload(); }) : undefined
+              }
               onDisconnect={() => {
-                if (health.account && confirm(`Disconnect ${g.label}? Your saved items will stay in Locus.`)) {
-                  return api.disconnect(g.source, health.account.id).then(() => { notifyLibraryChanged(); return reload(); });
+                if (accountId && confirm(`Disconnect ${connection.label}? Your saved items will stay in Locus.`)) {
+                  return api.disconnect(connection.source, accountId).then(() => { notifyLibraryChanged(); return reload(); });
                 }
                 return undefined;
               }}
-              onPair={async () => {
-                const r = await api.pairExtension(g.source);
-                setPair({ text: `${r.origin}\n${r.token}`, source: g.source });
-              }}
             />
-          ));
+          );
         })}
       </div>
-      {pair && (
-        <div className="block">
-          <h2 className="source-name">
-            <SourceMark source={pair.source} />
-            Extension pairing
-          </h2>
-          <p className="quiet">Paste this into the Locus extension. It is shown once.</p>
-          <textarea readOnly value={pair.text} />
-        </div>
-      )}
-      <div className="block">
-        <h2>Settings</h2>
+      <div className="block" id="preferences">
+        <h2>Preferences</h2>
         <label className="stack">
           <span>
-            <input type="checkbox" checked={data.settings.refreshOnOpen} disabled={settingsBusy} onChange={(e) => {
+            <input type="checkbox" checked={data.preferences.captureOnOpen} disabled={settingsBusy} onChange={(e) => {
               const checked = e.target.checked;
               setSettingsBusy(true);
               setPageError(null);
               api.settings(checked).then(() => reload()).catch((error: unknown) => setPageError(error instanceof Error ? error.message : String(error))).finally(() => setSettingsBusy(false));
             }} />{" "}
-            Refresh sources when Locus opens
+            Capture new saves when Locus opens
           </span>
         </label>
-        <p className="quiet">{data.extension.alive ? "Browser extension connected." : "Browser extension not connected."}</p>
         {data.pi.available ? <p className="quiet">Writing tools ready.</p> : null}
         {!data.pi.available && (
           <p className="quiet">
@@ -110,6 +239,20 @@ export function SourcesPage() {
             , then sign in.
           </p>
         )}
+      </div>
+
+      <div className="block" id="data-and-privacy">
+        <h2>Data and privacy</h2>
+        {data.imports.length > 0 ? (
+          <div id="import-history">
+            <h3>Import history</h3>
+            <ul>
+              {data.imports.map((entry) => (
+                <li key={entry.id}>{importHistoryLine(entry)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="filters">
           <button
             className="btn"
@@ -160,13 +303,19 @@ export function SourcesPage() {
               input.click();
             }}
           >
-            {deskAction === "restore" ? "Restoring…" : "Restore archive file"}
+            {deskAction === "restore" ? "Restoring…" : "Restore from archive"}
           </button>
+        </div>
+        <details id="import-source-exports" className="account-import">
+          <summary>Import source exports</summary>
+          <ImportPanel />
+        </details>
+        <div className="account-danger">
           <button
             className="btn danger"
             disabled={Boolean(deskAction)}
             onClick={() => {
-              if (!confirm("Delete the entire local library?")) return;
+              if (!confirm("This permanently deletes every Item in this Library.")) return;
               setDeskAction("delete");
               setPageError(null);
               api.deleteLibrary().then(() => { notifyLibraryChanged(); return reload(); }).then(() => setMsg("Library deleted.")).catch((e: unknown) => setPageError(e instanceof Error ? e.message : String(e))).finally(() => setDeskAction(null));
@@ -175,45 +324,30 @@ export function SourcesPage() {
             {deskAction === "delete" ? "Deleting…" : "Delete library"}
           </button>
         </div>
-        <ImportPanel />
       </div>
     </section>
   );
 }
 
-type SourceAccountState = "imported" | "pending" | "runner" | "extension" | "connected";
-
-function sourceAccountState(health: SourceHealth): SourceAccountState {
-  const explicit = health.account?.state;
-  if (explicit) return explicit;
-  if (!health.account) return "pending";
-  return "connected";
-}
-
 function SourceCard({
-  group,
-  health,
-  extensionAlive,
-  onConnect,
+  connection,
+  onStart,
+  onResolve,
   onCancel,
-  onResume,
   onDisconnect,
-  onPair,
 }: {
-  group: SourceGroup;
-  health: SourceHealth;
-  extensionAlive: boolean;
-  onConnect: () => void | Promise<void>;
+  connection: SourceConnection;
+  onStart: () => void | Promise<void>;
+  onResolve: () => void | Promise<void>;
   onCancel: () => void | Promise<void>;
-  onResume: () => void | Promise<void>;
   onDisconnect: () => void | Promise<void>;
-  onPair: () => void | Promise<void>;
 }) {
-  const running = health.running;
-  const progress = health.progress;
-  const last = health.lastRun;
-  const state = sourceAccountState(health);
-  const connected = state === "connected" || state === "runner" || state === "extension";
+  const state = connection.state;
+  const copy = CONNECTION_UI[state];
+  const handle = liveHandle(connection);
+  const progress = connection.progress;
+  const progressId = `${connection.source}-progress`;
+  const errorId = `${connection.source}-action-error`;
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const run = async (action: () => void | Promise<void>) => {
@@ -223,62 +357,59 @@ function SourceCard({
     try {
       await action();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
+      setActionError(`${e instanceof Error ? e.message : String(e)} ${nextStep(state)}`);
     } finally {
       setBusy(false);
     }
   };
+  const onPrimary = () => {
+    if (state === "capturing") {
+      document.getElementById(progressId)?.focus();
+      return;
+    }
+    void run(state === "needs_attention" ? onResolve : onStart);
+  };
+  const onSecondary = () => {
+    void run(state === "connecting" || state === "capturing" ? onCancel : onDisconnect);
+  };
   return (
-    <article className={`source-card src-${group.source}`}>
-      <h3 className="source-name">
-        <SourceMark source={group.source} named={false} />
-        {group.label}
-      </h3>
-      <p className="quiet">{health.account?.displayName || (state === "pending" ? "Not connected" : health.account?.externalId) || "Not connected"}</p>
-      <p className={`source-state source-state-${state}`} role="status">
-        {state === "imported" ? "Imported" : state === "pending" ? "Setup needed" : state === "extension" ? "Browser connected" : connected ? "Connected" : "Not connected"}
+    <article className={`source-card src-${connection.source}`}>
+      <h4 className="source-name">
+        <SourceMark source={connection.source} named={false} />
+        {connection.label}
+      </h4>
+      {handle ? <p className="source-handle">{handle}</p> : null}
+      <p className={`source-state source-state-${state.replaceAll("_", "-")}`} role="status">
+        {copy.status}
       </p>
-      {running && progress && (
-        <>
+      {connection.lastSuccessfulCapture?.finishedAt ? <p>{formatWhen(connection.lastSuccessfulCapture.finishedAt, "captured")}</p> : null}
+      {state === "needs_attention" && connection.latestAttempt?.recovery ? <p role="status">{connection.latestAttempt.recovery}</p> : null}
+      {state === "capturing" && progress ? (
+        <div id={progressId} tabIndex={-1} role="status">
           <div className="bar">
             <span style={{ ["--w" as string]: `${Math.min(100, 8 + progress.seen * 3)}%` }} />
           </div>
           <p>{progress.message}</p>
-          {progress.previewJpeg && (
+          {progress.previewJpeg ? (
             <img alt="The Locus capture window" src={`data:image/jpeg;base64,${progress.previewJpeg}`} style={{ width: "100%", border: "1px solid var(--rule)" }} />
-          )}
-          <button className="btn danger" disabled={busy} onClick={() => void run(onCancel)}>
-            Stop
-          </button>
-        </>
-      )}
-      {!running && (
-        <div className="filters">
-          {state !== "imported" ? <button className="btn primary" disabled={busy} onClick={() => void run(onConnect)}>
-            {connected ? "Refresh" : "Connect / pair"}
-          </button> : null}
-          {last?.errorCode === "challenge" && health.account && state !== "imported" && (
-            <button className="btn copper" disabled={busy} onClick={() => void run(onResume)}>
-              Resume
-            </button>
-          )}
-          {health.account && connected && (
-            <button className="btn danger" disabled={busy} onClick={() => void run(onDisconnect)}>
-              Disconnect
-            </button>
-          )}
-          {!extensionAlive || state === "pending" || state === "connected" ? <button className="btn" disabled={busy} onClick={() => void run(onPair)}>
-            Pair extension
-          </button> : null}
+          ) : null}
         </div>
-      )}
+      ) : null}
+      <div className="source-actions">
+        <button type="button" className="btn primary" disabled={busy} aria-describedby={actionError ? errorId : undefined} onClick={onPrimary}>
+          {copy.primary}
+        </button>
+        {copy.secondary ? (
+          <details className="source-more">
+            <summary>More</summary>
+            <button type="button" className={copy.secondary === "Disconnect" ? "btn danger" : "btn"} disabled={busy} onClick={onSecondary}>
+              {copy.secondary}
+            </button>
+          </details>
+        ) : null}
+      </div>
       {busy ? <p className="quiet" role="status">Working…</p> : null}
-      {actionError ? <p className="action-error" role="alert">{actionError}</p> : null}
-      {last && (
-        <p className={last.coverage === "complete" ? "ok" : "warn"}>
-          {last.coverageLabel} {last.recovery ? `— ${last.recovery}` : ""}
-        </p>
-      )}
+      {actionError ? <p id={errorId} className="action-error" role="alert">{actionError}</p> : null}
     </article>
   );
 }
@@ -307,7 +438,6 @@ function ImportPanel() {
   }
   return (
     <div className="stack" style={{ marginTop: 16 }}>
-      <h2 style={{ fontFamily: "var(--display)" }}>Import</h2>
       <textarea value={jsonl} onChange={(e) => { setJsonl(e.target.value); setErr(null); }} placeholder="Locus export (JSONL)" aria-label="Locus export JSONL" />
       <div className="filters">
         <button className="btn" disabled={busy} onClick={() => { if (!jsonl.trim()) { setErr("Paste a JSONL file first"); return; } void runImport(() => api.importJsonl(jsonl, true), true); }}>

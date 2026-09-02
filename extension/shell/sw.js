@@ -166,6 +166,7 @@ async function listen() {
       if (res.status === 204) continue;
       const job = await res.json().catch(() => null);
       if (!job?.id) continue;
+      // `token` is device pairing (wait/poll/finish job). Capture ingest uses job.token.
       await runJob(origin, token, job).catch((e) =>
         postJson(origin, token, `/capture/v1/jobs/${job.id}/finish`, {
           error: e instanceof Error ? e.message : String(e),
@@ -207,7 +208,11 @@ async function runJob(origin, token, job) {
       if (i > 30 && state === "loading") break;
       await new Promise((r) => setTimeout(r, 2000));
     }
-    const text = await runImport({ tabId: tab.id, tabUrl: job.url, origin, token, pack, ctx });
+    // Server-issued grant bound to this job's Source account. Using the device
+    // wildcard here would create a second live account from the site identity.
+    const ingest = job.token;
+    if (!ingest) throw new Error("job is missing its capture token");
+    const text = await runImport({ tabId: tab.id, tabUrl: job.url, origin, token: ingest, pack, ctx });
     await postJson(origin, token, `/capture/v1/jobs/${job.id}/finish`, { message: text });
     say(text);
   } finally {

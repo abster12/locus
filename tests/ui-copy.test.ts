@@ -53,9 +53,9 @@ test("Kitchen replaces Shelves in primary navigation with an in-place redirect",
   assert.match(app, /a === "shelves"/);
   assert.match(app, /history\.replaceState\(null, "", `\$\{location\.pathname\}\$\{location\.search\}#\/recent`\)/);
   assert.match(app, /name: "kitchen"/);
-  // Tab order: Desk · Kitchen · Atlas · Trips · Reading · Sources.
+  // Tab order: Desk · Kitchen · Atlas · Trips · Reading · Account.
   const tabs = [...app.matchAll(/<Tab href="(#[^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(tabs, ["#/recent", "#/kitchen", "#/atlas", "#/trips", "#/reading", "#/sources"]);
+  assert.deepEqual(tabs, ["#/recent", "#/kitchen", "#/atlas", "#/trips", "#/reading", "#/account"]);
   assert.match(app, /\+ New/);
   assert.match(app, /Plan a trip/);
   assert.match(app, /Save a link/);

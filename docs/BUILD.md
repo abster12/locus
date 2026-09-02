@@ -20,7 +20,7 @@ npm start
 
 ## Capture runner
 
-Connect / Refresh on Sources opens a headed Chrome window with a per-account profile at:
+Connect / Capture now on Account opens a headed Chrome window with a per-account profile at:
 
 `~/Library/Application Support/Locus/browsers/<source>/<accountId>/`
 
@@ -31,7 +31,7 @@ Locus does not copy that profile.
 `npm run build:extension` writes `extension/shell/pack.js` from `site-packs/` (also runs from `npm run dev` / `npm run build`).
 
 1. Chrome → Extensions → Load unpacked → `extension/shell`
-2. On Sources, click **Pair extension**
+2. On Account, click **Pair extension**
 3. Paste origin + token into the popup
 4. On a post, **Save this item**
 
@@ -39,7 +39,7 @@ Host permission is requested only for the current site.
 
 ## Importers
 
-- Capture Protocol JSONL on Sources
+- Capture Protocol JSONL on Account
 - Reddit official `saved_posts.csv` / `saved_comments.csv`
 - Instagram official export is not shipped (no proven Saved fixtures)
 

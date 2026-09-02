@@ -1,6 +1,7 @@
 import type { Db } from "./open.ts";
+import { cleanupSourceConnections } from "./source-lifecycle.ts";
 
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -607,6 +608,7 @@ export function migrateSchema(db: Db): void {
     if (current < 22) migrateKitchenTonightConcurrency(db);
     if (current < 23) migrateTripShareOwnerToken(db);
     if (current < 24) migrateTripShareHashOnly(db);
+    if (current < 25) cleanupSourceConnections(db, { inTransaction: true });
 
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec("COMMIT");

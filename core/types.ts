@@ -137,23 +137,23 @@ export function recoveryText(code: CaptureErrorCode): string {
     case "session-expired":
       return "Your login expired. Log in again.";
     case "challenge":
-      return "Complete the check in the window, then click Resume.";
+      return "Complete the check in the window, then continue.";
     case "wrong-page":
-      return "Open the saved-items page, then resume.";
+      return "Open the saved-items page, then continue.";
     case "permission-denied":
       return "Reconnect this source.";
     case "site-changed":
-      return "This source changed, so the refresh stopped.";
+      return "This source changed, so the capture stopped.";
     case "scan-stalled":
-      return "The refresh stopped early. Try again.";
+      return "The capture stopped early. Try again.";
     case "tab-closed":
-      return "The refresh stopped because the window closed.";
+      return "The capture stopped because the window closed.";
     case "server-unreachable":
       return "Locus lost the connection. Try again.";
     case "storage-full":
       return "Storage is full. Free some space, then try again.";
     case "interrupted":
-      return "Refresh stopped. Try again.";
+      return "Capture stopped. Try again.";
     default: {
       const _exhaustive: never = code;
       return _exhaustive;
