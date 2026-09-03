@@ -211,6 +211,34 @@ test("saving the same URL twice in one Library reuses the Item", async () => {
   assert.equal(((list.body as { items: unknown[] }).items).length, 1);
 });
 
+test("URL-only intake is searchable and sorts by its displayed discovery date", async () => {
+  const user = await login(worker, "desk-url-search@example.com", "URL Search");
+  const session = await sessionOf(worker, user.cookie);
+  const headers = mutate(user.cookie, session.csrfToken);
+  const older = await json(worker, "/api/intake", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      url: "https://example.com/older-published-item",
+      title: "Older published item",
+      publishedAt: "2026-09-02T08:00:00Z",
+    }),
+  });
+  assert.equal(older.res.status, 200, JSON.stringify(older.body));
+  const latest = await json(worker, "/api/intake", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ url: "https://github.com/duolahypercho/codex-router" }),
+  });
+  assert.equal(latest.res.status, 200, JSON.stringify(latest.body));
+  const latestId = (latest.body as { item: { id: string } }).item.id;
+
+  const recent = await json(worker, "/api/items", { headers: { cookie: user.cookie } });
+  assert.equal((recent.body as { items: { id: string }[] }).items[0]?.id, latestId);
+  const search = await json(worker, "/api/items?q=codex", { headers: { cookie: user.cookie } });
+  assert.deepEqual((search.body as { items: { id: string }[] }).items.map((item) => item.id), [latestId]);
+});
+
 test("preview does not insert", async () => {
   const user = await login(worker, "desk-preview@example.com", "Preview");
   const session = await sessionOf(worker, user.cookie);

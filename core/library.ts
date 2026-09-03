@@ -73,7 +73,9 @@ export interface ItemPage {
   counts: ItemListCounts;
 }
 
-type Cursor = { publishedAt: string; firstObservedAt: string; id: string };
+type Cursor = { sortAt: string; firstObservedAt: string; id: string };
+
+const ITEM_SORT_AT_SQL = "COALESCE(i.published_at, i.source_saved_at, i.captured_at, i.first_observed_at)";
 
 function encodeCursor(cursor: Cursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
@@ -83,8 +85,8 @@ function decodeCursor(raw: string | undefined): Cursor | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<Cursor>;
-    if (typeof value.publishedAt !== "string" || typeof value.firstObservedAt !== "string" || typeof value.id !== "string") return null;
-    return { publishedAt: value.publishedAt, firstObservedAt: value.firstObservedAt, id: value.id };
+    if (typeof value.sortAt !== "string" || typeof value.firstObservedAt !== "string" || typeof value.id !== "string") return null;
+    return { sortAt: value.sortAt, firstObservedAt: value.firstObservedAt, id: value.id };
   } catch {
     return null;
   }
@@ -226,7 +228,7 @@ function matchingWhere(filter: ItemListFilter, includeShelf = true): { where: st
   if (filter.q && filter.q.trim()) {
     const like = `%${filter.q.trim()}%`;
     where.push(`(
-      i.title LIKE ? OR i.body LIKE ? OR i.author_name LIKE ? OR i.author_handle LIKE ?
+      i.title LIKE ? OR i.body LIKE ? OR i.url LIKE ? OR i.author_name LIKE ? OR i.author_handle LIKE ?
       OR EXISTS (SELECT 1 FROM notes n WHERE n.item_id = i.id AND n.body LIKE ?)
       OR EXISTS (SELECT 1 FROM memberships m JOIN tags t ON t.id = m.target_id WHERE m.item_id = i.id AND t.name LIKE ?)
       ${filter.searchRecipeDocuments && filter.searchRecipeLibraryId ? `OR EXISTS (
@@ -234,7 +236,7 @@ function matchingWhere(filter: ItemListFilter, includeShelf = true): { where: st
          WHERE kr.item_id = i.id AND kr.library_id = ? AND kr.draft_json LIKE ?
       )` : ""}
     )`);
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like);
     if (filter.searchRecipeDocuments && filter.searchRecipeLibraryId) params.push(filter.searchRecipeLibraryId, like);
   }
   if (includeShelf && filter.shelf && isShelfKey(filter.shelf)) {
@@ -277,22 +279,26 @@ export function listItemsPage(db: Db, filter: ItemListFilter = {}, options: { cu
   const cursor = decodeCursor(options.cursor);
   if (cursor) {
     matched.where.push(`(
-      COALESCE(i.published_at, '') < ?
-      OR (COALESCE(i.published_at, '') = ? AND i.first_observed_at < ?)
-      OR (COALESCE(i.published_at, '') = ? AND i.first_observed_at = ? AND i.id < ?)
+      ${ITEM_SORT_AT_SQL} < ?
+      OR (${ITEM_SORT_AT_SQL} = ? AND i.first_observed_at < ?)
+      OR (${ITEM_SORT_AT_SQL} = ? AND i.first_observed_at = ? AND i.id < ?)
     )`);
-    matched.params.push(cursor.publishedAt, cursor.publishedAt, cursor.firstObservedAt, cursor.publishedAt, cursor.firstObservedAt, cursor.id);
+    matched.params.push(cursor.sortAt, cursor.sortAt, cursor.firstObservedAt, cursor.sortAt, cursor.firstObservedAt, cursor.id);
   }
   const rows = db
     .prepare(`${ITEM_SELECT} ${matched.where.length ? `WHERE ${matched.where.join(" AND ")}` : ""}
-      ORDER BY COALESCE(i.published_at, '') DESC, i.first_observed_at DESC, i.id DESC LIMIT ?`)
+      ORDER BY ${ITEM_SORT_AT_SQL} DESC, i.first_observed_at DESC, i.id DESC LIMIT ?`)
     .all(...matched.params, limit + 1) as ItemRow[];
   const pageRows = rows.slice(0, limit);
   const last = pageRows[pageRows.length - 1];
   return {
     items: pageRows.map((row) => hydrate(db, row)),
     nextCursor: rows.length > limit && last
-      ? encodeCursor({ publishedAt: last.published_at ?? "", firstObservedAt: last.first_observed_at, id: last.id })
+      ? encodeCursor({
+          sortAt: last.published_at ?? last.source_saved_at ?? last.captured_at ?? last.first_observed_at,
+          firstObservedAt: last.first_observed_at,
+          id: last.id,
+        })
       : null,
     counts: itemCounts(db, filter),
   };
@@ -303,7 +309,7 @@ export function listItems(db: Db, filter: ItemListFilter = {}): ItemCard[] {
   const matched = matchingWhere(filter);
   const rows = db
     .prepare(`${ITEM_SELECT} ${matched.where.length ? `WHERE ${matched.where.join(" AND ")}` : ""}
-      ORDER BY COALESCE(i.published_at, '') DESC, i.first_observed_at DESC, i.id DESC`)
+      ORDER BY ${ITEM_SORT_AT_SQL} DESC, i.first_observed_at DESC, i.id DESC`)
     .all(...matched.params) as ItemRow[];
   return rows.map((row) => hydrate(db, row));
 }

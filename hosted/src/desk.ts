@@ -93,7 +93,9 @@ type ItemRow = {
   source: string | null;
 };
 
-type Cursor = { publishedAt: string; firstObservedAt: string; id: string };
+type Cursor = { sortAt: string; firstObservedAt: string; id: string };
+
+const ITEM_SORT_AT_SQL = "COALESCE(i.published_at, i.source_saved_at, i.captured_at, i.first_observed_at)";
 
 export type Org = {
   collections: { id: string; name: string; description: string | null }[];
@@ -229,15 +231,15 @@ export async function listItemsPage(
   const cursor = decodeCursor(options.cursor);
   if (cursor) {
     matched.where.push(`(
-      COALESCE(i.published_at, '') < ?
-      OR (COALESCE(i.published_at, '') = ? AND i.first_observed_at < ?)
-      OR (COALESCE(i.published_at, '') = ? AND i.first_observed_at = ? AND i.id < ?)
+      ${ITEM_SORT_AT_SQL} < ?
+      OR (${ITEM_SORT_AT_SQL} = ? AND i.first_observed_at < ?)
+      OR (${ITEM_SORT_AT_SQL} = ? AND i.first_observed_at = ? AND i.id < ?)
     )`);
     matched.params.push(
-      cursor.publishedAt,
-      cursor.publishedAt,
+      cursor.sortAt,
+      cursor.sortAt,
       cursor.firstObservedAt,
-      cursor.publishedAt,
+      cursor.sortAt,
       cursor.firstObservedAt,
       cursor.id,
     );
@@ -245,7 +247,7 @@ export async function listItemsPage(
   const rows = await all<ItemRow>(
     db,
     `${ITEM_SELECT} WHERE ${matched.where.join(" AND ")}
-      ORDER BY COALESCE(i.published_at, '') DESC, i.first_observed_at DESC, i.id DESC
+      ORDER BY ${ITEM_SORT_AT_SQL} DESC, i.first_observed_at DESC, i.id DESC
       LIMIT ?`,
     ...matched.params,
     limit + 1,
@@ -257,7 +259,7 @@ export async function listItemsPage(
     nextCursor:
       rows.length > limit && last
         ? encodeCursor({
-            publishedAt: last.published_at ?? "",
+            sortAt: last.published_at ?? last.source_saved_at ?? last.captured_at ?? last.first_observed_at,
             firstObservedAt: last.first_observed_at,
             id: last.id,
           })
@@ -705,11 +707,11 @@ function matchingWhere(libraryId: string, filter: ItemListFilter, includeShelf =
   if (filter.q && filter.q.trim()) {
     const like = `%${filter.q.trim()}%`;
     where.push(`(
-      i.title LIKE ? OR i.body LIKE ? OR i.author_name LIKE ? OR i.author_handle LIKE ?
+      i.title LIKE ? OR i.body LIKE ? OR i.url LIKE ? OR i.author_name LIKE ? OR i.author_handle LIKE ?
       OR EXISTS (SELECT 1 FROM notes n WHERE n.item_id = i.id AND n.body LIKE ?)
       OR EXISTS (SELECT 1 FROM memberships m JOIN tags t ON t.id = m.target_id WHERE m.item_id = i.id AND t.name LIKE ?)
     )`);
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like);
   }
   if (includeShelf && filter.shelf && isShelfKey(filter.shelf)) {
     const condition = shelfCondition(filter.shelf);
@@ -946,13 +948,13 @@ function decodeCursor(raw: string | undefined): Cursor | null {
     const json = atob(raw.replaceAll("-", "+").replaceAll("_", "/") + pad);
     const value = JSON.parse(json) as Partial<Cursor>;
     if (
-      typeof value.publishedAt !== "string" ||
+      typeof value.sortAt !== "string" ||
       typeof value.firstObservedAt !== "string" ||
       typeof value.id !== "string"
     ) {
       return null;
     }
-    return { publishedAt: value.publishedAt, firstObservedAt: value.firstObservedAt, id: value.id };
+    return { sortAt: value.sortAt, firstObservedAt: value.firstObservedAt, id: value.id };
   } catch {
     return null;
   }

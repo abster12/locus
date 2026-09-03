@@ -173,6 +173,19 @@ test("Library intake tools register on Desk, present drafts without saving, and 
     assert.ok(writes.some((entry) => entry === "POST /api/intake/batch"));
     await page.waitForFunction(() => document.body.innerText.includes("Exact save"), { timeout: 5000 });
     assert.match(await page.evaluate(() => document.body.innerText), /Added by agent/i);
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const card = [...document.querySelectorAll<HTMLElement>("article.post")]
+          .find((entry) => entry.innerText.includes("Exact save"));
+        let heading = card?.previousElementSibling;
+        while (heading && !heading.matches(".day-head")) heading = heading.previousElementSibling;
+        return {
+          dateIsPresent: card?.querySelector(".by-date")?.textContent?.trim() !== "Undated",
+          heading: heading?.textContent?.trim(),
+        };
+      }),
+      { dateIsPresent: true, heading: "Today" },
+    );
     await page.waitForSelector(".intake-why", { timeout: 5000 });
     const why = await page.$eval(".intake-why", (el) => el.textContent ?? "");
     assert.match(why, /User asked to tag it tech/);

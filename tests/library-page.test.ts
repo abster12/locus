@@ -66,6 +66,18 @@ test("Item pages have stable cursor ordering and library-wide counts", () => {
   value.close();
 });
 
+test("recent pages follow the displayed date and search URL-only Items", () => {
+  const value = db();
+  insertItem(value, "published", "2026-09-04T08:00:00Z");
+  value.prepare(`UPDATE items SET published_at = '2026-09-02T08:00:00Z' WHERE id = 'published'`).run();
+  insertItem(value, "codex-router", "2026-09-04T09:00:00Z");
+  value.prepare(`UPDATE items SET body = NULL, url = 'https://github.com/duolahypercho/codex-router' WHERE id = 'codex-router'`).run();
+
+  assert.deepEqual(listItemsPage(value, { view: "recent" }).items.map((item) => item.id), ["codex-router", "published"]);
+  assert.deepEqual(listItemsPage(value, { q: "codex" }).items.map((item) => item.id), ["codex-router"]);
+  value.close();
+});
+
 test("shelf pages and counts share shelf membership semantics", () => {
   const value = db();
   insertItem(value, "tech-item", "2026-08-27T00:00:00Z");

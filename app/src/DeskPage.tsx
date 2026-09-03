@@ -117,7 +117,7 @@ function LinkPreviewCard({ url, permalink, onPick }: { url: string; permalink: s
 }
 
 function wallAt(item: ItemCard): string | null {
-  return item.publishedAt;
+  return item.publishedAt || item.sourceSavedAt || item.capturedAt || item.firstObservedAt;
 }
 
 function dayHeading(key: string): string {
@@ -133,7 +133,7 @@ function dayHeading(key: string): string {
 }
 
 function sortAt(item: ItemCard): string {
-  return item.publishedAt || item.firstObservedAt;
+  return wallAt(item) ?? "";
 }
 
 function groupByDay(items: ItemCard[]): [string, ItemCard[]][] {
