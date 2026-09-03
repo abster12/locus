@@ -363,18 +363,20 @@ const BUILD_DRAFT_SCHEMA = {
 };
 
 const REC_TEXT_FIELD = { type: "string", minLength: 1, maxLength: 280 };
+const REC_SUMMARY_FIELD = { type: "string", minLength: 1, maxLength: 400 };
 
 const REC_OPTION_SCHEMA = {
   type: "object",
   properties: {
     opinion: REC_TEXT_FIELD,
+    summary: REC_SUMMARY_FIELD,
     fit: REC_TEXT_FIELD,
     tradeoff: REC_TEXT_FIELD,
     basis: REC_TEXT_FIELD,
     effect: REC_TEXT_FIELD,
     operations: OPERATIONS_SCHEMA,
   },
-  required: ["opinion", "fit", "tradeoff", "basis", "effect", "operations"],
+  required: ["opinion", "summary", "fit", "tradeoff", "basis", "effect", "operations"],
   additionalProperties: false,
 };
 
@@ -584,8 +586,11 @@ async function presentRecsHandler(host: TripsWebmcpHost, input: unknown): Promis
     for (const operation of option.operations) {
       if (!operation || typeof operation !== "object" || Array.isArray(operation)) invalidInput();
     }
+    const summary = option.summary;
+    if (typeof summary !== "string" || !summary.trim()) invalidInput();
     return {
       opinion: optionText(option.opinion),
+      summary: sanitizeBounded(summary, 400),
       fit: optionText(option.fit),
       tradeoff: optionText(option.tradeoff),
       basis: optionText(option.basis),
@@ -756,7 +761,7 @@ function buildTools(host: TripsWebmcpHost): BuiltTool[] {
     {
       name: "present_trip_recommendations",
       description:
-        "For one explicit open-ended request or hole, show exactly three opinionated options in the visible recommendations drawer: each needs opinion, why it fits, an important tradeoff, provenance/basis, proposed typed addStop/moveStop operations, and the likely schedule effect. Presentation is temporary — nothing is written until the human chooses one; you cannot choose for them.",
+        "For one explicit open-ended request or hole, show exactly three opinionated options in the visible recommendations drawer: each needs opinion, a summary of every proposed day or stop (not only the first), why it fits, an important tradeoff, provenance/basis, proposed typed addStop/moveStop operations, and the likely schedule effect. Presentation is temporary — nothing is written until the human chooses one; you cannot choose for them.",
       inputSchema: PRESENT_RECS_SCHEMA,
       annotations: { readOnlyHint: false, untrustedContentHint: true },
       execute: wrapTool(host, "present_trip_recommendations", (input) => presentRecsHandler(host, input)),

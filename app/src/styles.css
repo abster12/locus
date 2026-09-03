@@ -1437,6 +1437,7 @@ html[data-theme="dark"] .stage-wv { background: #111; }
   border: 1px solid var(--rule); border-radius: 11px; padding: 9px 12px;
   background: var(--card); box-shadow: var(--lift);
 }
+.trip-stop:has(.trip-stop-menu[open]) { z-index: 8; }
 .trip-stop-editing { display: block; min-height: 0; box-shadow: none; }
 .trip-stop-draft {
   border-style: dashed;

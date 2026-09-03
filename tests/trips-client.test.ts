@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setupBodyFromForm } from "../app/src/trips-index.tsx";
 import { resolveTripView } from "../app/src/trips-document.tsx";
-import { parseRecommendations } from "../app/src/trips-recommendations.tsx";
+import { optionPlacement, optionTitle, parseRecommendations } from "../app/src/trips-recommendations.tsx";
 import { buildAddOrFillOps, isHomePlacement, moveStopOp, placementAt, stepAnchor } from "../app/src/trips-stop-ops.ts";
 import { stopCardMeta, stopFacts, stopOpenLabel, stopSourceLink } from "../app/src/trips-format.ts";
 import { updateStopOps } from "../app/src/trips-stop-editor.tsx";
@@ -83,6 +83,7 @@ test("resolveTripView picks overview and schedule from the hash and days by id",
 test("parseRecommendations accepts exactly three bounded options and rejects junk", () => {
   const option = {
     opinion: "Go early",
+    summary: "Day 1 Fushimi at opening, then a slow walk back.",
     fit: "cooler light",
     tradeoff: "crowds return later",
     basis: "saved post",
@@ -102,6 +103,30 @@ test("parseRecommendations accepts exactly three bounded options and rejects jun
   assert.equal(parseRecommendations({ options: [option, option, option, option] }), null, "four options are not the presentation contract");
   assert.equal(parseRecommendations({ options: [option, option, "junk"] }), null);
   assert.equal(parseRecommendations({ options: [option, option, { ...option, operations: "not-array" }] }), null);
+});
+
+test("recommendation cards title from summary and list every proposed day", () => {
+  const trip = { days: [{ id: "day-1", label: "Day 1" }, { id: "day-2", label: "Day 2" }] } as unknown as TripDocument;
+  const option = {
+    opinion: "Classic loop",
+    summary: "Day 1 Kochi. Day 2 houseboat. ",
+    fit: "first timer",
+    tradeoff: "road time",
+    basis: "saved post",
+    effect: "fills both days",
+    operations: [
+      { type: "addStop", dayId: "day-1", content: { kind: "outside", title: "Fort Kochi" } },
+      { type: "addStop", dayId: "day-2", content: { kind: "outside", title: "Alleppey houseboat" } },
+      { type: "addStop", dayId: "day-1", content: { kind: "outside", title: "Chinese nets" } },
+    ],
+  };
+  assert.equal(optionTitle(option), "Day 1 Kochi. Day 2 houseboat.");
+  assert.equal(optionPlacement(option, trip), "Day 1 · Day 2");
+  assert.equal(
+    optionTitle({ ...option, summary: "" }),
+    "Fort Kochi",
+    "without a summary the first outside title remains the fallback",
+  );
 });
 
 test("buildAddOrFillOps shares add vs fill placement for Library and placeholder", () => {

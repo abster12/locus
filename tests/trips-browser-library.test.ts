@@ -229,6 +229,7 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
                 options: [
                   {
                     opinion: "Best fit",
+                    summary: "Fills the Day 1 dinner hole with Ramen Tatsu at 19:30.",
                     fit: "Two stops away from the day's temple climb, walking distance from the hotel.",
                     tradeoff: "Books out early most nights.",
                     basis: "One saved Library source and your hard constraint of no 07:00 trains.",
@@ -237,6 +238,7 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
                   },
                   {
                     opinion: "Most adventurous",
+                    summary: "Fills the Day 1 dinner hole with Gion Kappa at 20:00.",
                     fit: "Matches the request for a quiet dinner with a local counter feel.",
                     tradeoff: "Requires a 25 minute bus ride back.",
                     basis: "One Place saved in Atlas.",
@@ -245,6 +247,7 @@ test("trips browser: drafts, holes, and the temporary recommendation sheet", asy
                   },
                   {
                     opinion: "Lowest pressure",
+                    summary: "Leaves dinner Unscheduled as a conbini picnic.",
                     fit: "Keeps the evening loose after a long walking day.",
                     tradeoff: "Less of a headline meal.",
                     basis: "Your pace note: slow evenings.",

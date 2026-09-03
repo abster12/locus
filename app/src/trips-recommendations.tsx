@@ -3,6 +3,7 @@ import { api, type TripChangeOp, type TripDocument } from "./api.ts";
 
 export type TripRecommendationOption = {
   opinion: string;
+  summary: string;
   fit: string;
   tradeoff: string;
   basis: string;
@@ -13,9 +14,10 @@ export type TripRecommendationOption = {
 export type TripRecommendations = { tripId?: string; request: string; options: TripRecommendationOption[] };
 
 const REC_TEXT_MAX = 280;
+const REC_SUMMARY_MAX = 400;
 
-function recText(value: unknown): string {
-  return typeof value === "string" ? value.trim().slice(0, REC_TEXT_MAX) : "";
+function recText(value: unknown, max = REC_TEXT_MAX): string {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
 /** The presentation contract delivers exactly three bounded options as
@@ -33,6 +35,7 @@ export function parseRecommendations(detail: unknown): TripRecommendations | nul
     if (!Array.isArray(opt.operations)) return null;
     options.push({
       opinion: recText(opt.opinion),
+      summary: recText(opt.summary, REC_SUMMARY_MAX),
       fit: recText(opt.fit),
       tradeoff: recText(opt.tradeoff),
       basis: recText(opt.basis),
@@ -48,6 +51,7 @@ export function parseRecommendations(detail: unknown): TripRecommendations | nul
 }
 
 export function optionTitle(option: TripRecommendationOption): string {
+  if (option.summary.trim()) return option.summary.trim();
   for (const op of option.operations) {
     if (!op || typeof op !== "object") continue;
     const record = op as Record<string, unknown>;
@@ -60,17 +64,23 @@ export function optionTitle(option: TripRecommendationOption): string {
 }
 
 export function optionPlacement(option: TripRecommendationOption, trip: TripDocument): string | null {
+  const labels: string[] = [];
+  const seen = new Set<string>();
   for (const op of option.operations) {
     if (!op || typeof op !== "object") continue;
     const record = op as Record<string, unknown>;
     if (record.type !== "addStop") continue;
-    if (record.dayId === null) return "Unscheduled";
-    if (typeof record.dayId === "string") {
+    let label: string | null = null;
+    if (record.dayId === null) label = "Unscheduled";
+    else if (typeof record.dayId === "string") {
       const day = trip.days.find((candidate) => candidate.id === record.dayId);
-      return day ? day.label : null;
+      label = day ? day.label : null;
     }
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
   }
-  return null;
+  return labels.length ? labels.join(" · ") : null;
 }
 
 /** Temporary drawer for presented recommendations: desktop side drawer, mobile

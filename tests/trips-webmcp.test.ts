@@ -759,7 +759,7 @@ test("present_trip_recommendations requires exactly three rich options and write
   const cleanup = registerTripsWebmcp(runtime, host);
   const present = tools.get("present_trip_recommendations")!;
   const operation = { type: "addStop", dayId: "day-1", content: { kind: "outside", title: "Tea tasting", notes: null, url: null } };
-  const option = { opinion: "Best fit", fit: "Near the temple", tradeoff: "Booked out", basis: "2 saved Library sources", effect: "No known conflict", operations: [operation] };
+  const option = { opinion: "Best fit", summary: "Day 1 tea tasting after the temple walk.", fit: "Near the temple", tradeoff: "Booked out", basis: "2 saved Library sources", effect: "No known conflict", operations: [operation] };
 
   const result = (await present.execute({ request: "quiet dinner near Gion", options: [option, { ...option, opinion: "Adventurous" }, { ...option, opinion: "Lowest pressure" }] })) as {
     ok: boolean;
@@ -777,6 +777,12 @@ test("present_trip_recommendations requires exactly three rich options and write
   assert.equal(panel.request, "quiet dinner near Gion");
   assert.equal(panel.options.length, 3);
   assert.deepEqual(panel.options[0]!.operations, [operation], "typed operations pass through for the human to choose");
+  assert.equal(panel.options[0]!.summary, "Day 1 tea tasting after the temple walk.");
+  assert.deepEqual(
+    await present.execute({ request: "r", options: [{ ...option, summary: undefined }, option, option] }),
+    { ok: false, error: "invalid" },
+    "a summary is required so the card can name every proposed day",
+  );
 
   // Not exactly three is rejected before presentation.
   assert.deepEqual(await present.execute({ request: "r", options: [option, option] }), { ok: false, error: "invalid" });

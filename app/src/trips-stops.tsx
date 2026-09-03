@@ -31,6 +31,18 @@ export function DayPlanner({
   const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
+    const onPoint = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      for (const menu of document.querySelectorAll("details.trip-stop-menu[open]")) {
+        if (!menu.contains(target)) menu.removeAttribute("open");
+      }
+    };
+    document.addEventListener("pointerdown", onPoint);
+    return () => document.removeEventListener("pointerdown", onPoint);
+  }, []);
+
+  useEffect(() => {
     if (!historyOpen) return;
     let alive = true;
     api

@@ -718,6 +718,7 @@ test("build_trip_draft makes visible Drafts and present_trip_recommendations sho
     // presentation itself writes nothing.
     const option = {
       opinion: "Best fit",
+      summary: "Day 1 tea tasting after the temple walk.",
       fit: "Next to the temple walk",
       tradeoff: "Booked out weeks ahead",
       basis: "2 saved Library sources",
