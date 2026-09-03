@@ -56,7 +56,8 @@ function isHostedRoute(name: Route["name"]): boolean {
     name === "save" ||
     name === "account" ||
     name === "collections" ||
-    name === "collection"
+    name === "collection" ||
+    name === "reading"
   );
 }
 
@@ -430,11 +431,11 @@ export function App() {
             <Tab href="#/trips" active={route.name === "trips" || route.name === "tripsSetup" || route.name === "trip"}>
               Trips
             </Tab>
-            <Tab href="#/reading" active={route.name === "reading"}>
-              Reading
-            </Tab>
           </>
         ) : null}
+        <Tab href="#/reading" active={route.name === "reading"}>
+          Reading
+        </Tab>
         <Tab href="#/account" active={route.name === "account"}>
           Account
         </Tab>
@@ -454,7 +455,7 @@ export function App() {
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
       {route.name === "account" && (RUNTIME === "hosted" ? <HostedAccountPage /> : <SourcesPage />)}
-      {RUNTIME !== "hosted" && route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
+      {route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
       {RUNTIME !== "hosted" && route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {RUNTIME !== "hosted" && route.name === "kitchen" && <KitchenPage />}
       {RUNTIME !== "hosted" && route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}

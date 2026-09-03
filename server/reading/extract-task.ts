@@ -1,5 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { extractPage } from "./extract.ts";
+import { extractPage } from "./extract-page.ts";
 
 const input = workerData as { html: string; finalUrl: string; fallbackTitle: string | null };
 try {

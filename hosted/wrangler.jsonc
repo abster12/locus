@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-02",
   "compatibility_flags": ["nodejs_compat"],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "assets": {
     "directory": "../dist/hosted-app",
     "binding": "ASSETS",
@@ -43,6 +46,9 @@
     "staging": {
       "workers_dev": true,
       "preview_urls": false,
+      "triggers": {
+        "crons": ["* * * * *"]
+      },
       "vars": {
         "BETTER_AUTH_URL": "https://locus-identity-staging.abhigyan0987.workers.dev",
         // Submitted challenge env stays open and free through 2026-09-21 17:00 PDT.

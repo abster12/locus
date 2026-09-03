@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { openDb, tx } from "../db/open.ts";
 import { SCHEMA_VERSION } from "../db/schema.ts";
 import { wipeLibrary } from "../core/library.ts";
-import { CANDIDATE_LIMIT, cleanupUrl, discoverCandidates, isChallengeTitle } from "../server/reading/policy.ts";
+import { CANDIDATE_LIMIT, cleanupUrl, discoverCandidates, isChallengeTitle, itemUrlCandidate } from "../server/reading/policy.ts";
 import {
   LOCAL_LIBRARY_ID,
   absorbPreviewedUrl,
@@ -116,6 +116,17 @@ test("truncated display URLs collapse; distinct paths do not", () => {
     "https://x.com/a/status/1",
   );
   assert.equal(hosts.candidates.length, 1);
+});
+
+test("itemUrlCandidate admits a saved article URL and rejects social permalinks", () => {
+  const essay = itemUrlCandidate("https://www.example.com/essays/one?utm_source=x");
+  assert.equal(essay?.canonicalUrl, "https://example.com/essays/one");
+  assert.equal(essay?.kind, "article");
+  assert.equal(itemUrlCandidate("https://x.com/a/status/1"), null);
+  assert.equal(itemUrlCandidate("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), null);
+  assert.equal(itemUrlCandidate("http://127.0.0.1/secret"), null);
+  assert.equal(itemUrlCandidate("https://i.redd.it/abc.jpg"), null);
+  assert.equal(itemUrlCandidate("https://arxiv.org/pdf/2301.00001.pdf")?.kind, "pdf");
 });
 
 test("hard exclusions drop social assets, permalinks, binaries, and the Item permalink", () => {

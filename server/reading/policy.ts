@@ -98,6 +98,16 @@ export function discoverCandidates(body: string | null | undefined, permalink: s
   return { candidates, exclusions };
 }
 
+/** The Item URL itself, when it is readable writing rather than a social permalink. */
+export function itemUrlCandidate(permalink: string): ReadingCandidate | null {
+  const cleaned = cleanupUrl(permalink);
+  if (!cleaned) return null;
+  const excluded = hardExclusion(cleaned, "", null);
+  if (excluded) return null;
+  const kind: "article" | "pdf" = isPdfPath(new URL(cleaned.canonicalUrl).pathname) ? "pdf" : "article";
+  return { ...cleaned, kind };
+}
+
 export function cleanupUrl(raw: string): { observedUrl: string; canonicalUrl: string } | null {
   const stripped = stripTrailingPunct(raw.trim());
   if (!stripped || stripped.length > MAX_URL) return null;
@@ -117,9 +127,11 @@ export function cleanupUrl(raw: string): { observedUrl: string; canonicalUrl: st
     parsed.port = "";
   }
   if (parsed.pathname === "") parsed.pathname = "/";
-  for (const key of [...parsed.searchParams.keys()]) {
-    if (key.toLowerCase().startsWith("utm_") || TRACKING.test(key)) parsed.searchParams.delete(key);
-  }
+  const trackingKeys: string[] = [];
+  parsed.searchParams.forEach((_value, key) => {
+    if (key.toLowerCase().startsWith("utm_") || TRACKING.test(key)) trackingKeys.push(key);
+  });
+  for (const key of trackingKeys) parsed.searchParams.delete(key);
 
   parsed.hostname = applyHostPolicy(parsed.hostname.toLowerCase());
   if (parsed.pathname.length > 1 && parsed.pathname.endsWith("/")) {

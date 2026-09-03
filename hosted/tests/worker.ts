@@ -1,4 +1,5 @@
 import worker, { createAuth, registrationClosed, type Env } from "../src/index.ts";
+import { findLibrary } from "../src/identity.ts";
 
 async function signCookie(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -98,8 +99,58 @@ async function testStats(env: Env): Promise<Response> {
     libraries: await count("libraries"),
     memberships: await count("library_memberships"),
     userAccess: await count("user_access"),
+    readingDocuments: await count("reading_documents"),
     accounts: accounts.results,
   });
+}
+
+async function testSeedReading(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json()) as {
+    userId?: string;
+    canonicalUrl?: string;
+    title?: string;
+    availability?: string;
+  };
+  if (!body.userId || !body.canonicalUrl) {
+    return Response.json({ error: "Missing userId or canonicalUrl" }, { status: 400 });
+  }
+  const library = await findLibrary(env, body.userId);
+  if (!library) return Response.json({ error: "Library not found" }, { status: 404 });
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const availability = body.availability === "pending" ? "pending" : "ready";
+  await env.DB.prepare(
+    `INSERT INTO reading_documents (
+      id, library_id, canonical_url, observed_url, kind, availability, original_status,
+      title, publication, last_saved_at, next_attempt_at, created_at, updated_at,
+      excerpt, word_count, reading_minutes, search_text, content_blocks
+    ) VALUES (?, ?, ?, ?, 'article', ?, 'reachable', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      library.id,
+      body.canonicalUrl,
+      body.canonicalUrl,
+      availability,
+      body.title ?? "Seeded essay",
+      new URL(body.canonicalUrl).hostname,
+      now,
+      availability === "pending" ? now : null,
+      now,
+      now,
+      availability === "ready" ? "A saved snapshot." : null,
+      availability === "ready" ? 200 : null,
+      availability === "ready" ? 1 : null,
+      availability === "ready" ? "A saved snapshot." : null,
+      availability === "ready"
+        ? JSON.stringify({
+            version: 1,
+            blocks: [{ id: "p-1", type: "paragraph", inlines: [{ text: "A saved snapshot.", marks: [] }] }],
+          })
+        : null,
+    )
+    .run();
+  return Response.json({ id, libraryId: library.id });
 }
 
 async function testDisable(request: Request, env: Env): Promise<Response> {
@@ -122,6 +173,9 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/__test/stats") {
       return testStats(env);
+    }
+    if (request.method === "POST" && url.pathname === "/__test/reading-document") {
+      return testSeedReading(request, env);
     }
     return worker.fetch(request, env, ctx);
   },

@@ -30,6 +30,7 @@ Do not build Cloudflare Browser Run or Containers for this path. Local Locus may
 - D1 `0004_library_items.sql` applied local + staging (items, item_state, activities, item_intake, tags, collections, memberships, notes). Unique `(library_id, url)` and `(library_id, tag name)`.
 - Desk + Save a link is on the staging Worker. Two-user isolation is covered by Worker tests; operator smoke with two Google accounts is the remaining live check.
 - Desk mutations (status, tags, notes, collections, memberships) are implemented on the Worker and in hosted Desk/Stage UI. Worker tests cover two-user isolation; deploy to staging next.
+- Reading (documents, progress, extract-via-fetch, D1 text) is implemented on the Worker. The Reading tab is on. Images stay at the original URL. Deploy Reading after Desk mutations smoke.
 - Local Account/Sources and Library Intake exist on localhost. They are not on the Worker yet.
 - Effect remains excluded (ADR 0002).
 
@@ -146,4 +147,4 @@ Production env, custom domain, and Chrome Web Store listing are **later ops**, n
 
 ## Next milestone
 
-Deploy step 2 (Desk mutations) to staging, then two-user smoke: accept/archive, tag, note, and a Collection stay inside one Library. Do not start Steps 3–7 until then.
+Deploy step 2 (Desk mutations) to staging, then two-user smoke. Then apply `0005_reading.sql` and deploy step 3 (Reading): two-user smoke that a document, progress, and remove stay inside one Library.
