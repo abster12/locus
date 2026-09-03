@@ -1,0 +1,12 @@
+{
+  "name": "Locus",
+  "short_name": "Locus",
+  "description": "Your saves, in one place.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f1f2ef",
+  "theme_color": "#f1f2ef",
+  "icons": [
+    { "src": "/locus-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

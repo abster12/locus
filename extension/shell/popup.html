@@ -6,11 +6,13 @@
       body { font: 13px/1.4 "Avenir Next", sans-serif; width: 280px; margin: 12px; color: #241c16; background: #efe4d0; }
       input, button { width: 100%; margin: 4px 0; }
       .quiet { color: #6d5c4c; }
+      .brand { display: flex; align-items: center; gap: 7px; font-family: "Iowan Old Style", Georgia, serif; font-size: 22px; }
+      .brand img { width: 28px; height: 28px; }
       .hidden { display: none; }
     </style>
   </head>
   <body>
-    <strong>Locus</strong>
+    <strong class="brand"><img src="icons/locus-32.png" alt="" />Locus</strong>
     <p id="hint" class="quiet">Pairs with the desk by itself. Connect on Sources opens the saved page here — you only log in if the site asks.</p>
     <div id="manual">
       <input id="origin" placeholder="https://locus-identity-staging.abhigyan0987.workers.dev" />

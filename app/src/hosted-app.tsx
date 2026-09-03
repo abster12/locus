@@ -9,6 +9,7 @@ import {
   startGoogleSignIn,
   type SessionState,
 } from "./session.ts";
+import { BrandLockup } from "./Brand.tsx";
 
 export function HostedApp() {
   const [session, setSession] = useState<SessionState | null>(null);
@@ -71,7 +72,7 @@ export function HostedApp() {
   if (!session) {
     return (
       <div className="shell hosted-session">
-        <p className="wordmark">Locus</p>
+        <BrandLockup />
         <p className="quiet">Checking session…</p>
       </div>
     );
@@ -80,7 +81,7 @@ export function HostedApp() {
   if (session.kind === "load-failed") {
     return (
       <div className="shell hosted-session">
-        <p className="wordmark">Locus</p>
+        <BrandLockup />
         <p className="bad" role="alert">Could not load session.</p>
         <button type="button" className="btn primary" onClick={() => void refresh()}>
           Retry
@@ -92,7 +93,7 @@ export function HostedApp() {
   if (session.kind === "hosted-access-denied") {
     return (
       <div className="shell hosted-session">
-        <p className="wordmark">Locus</p>
+        <BrandLockup />
         <p className="bad" role="alert">Access denied.</p>
         {signOutFailed ? <p className="bad" role="alert">Could not sign out. Try again.</p> : null}
         <button type="button" className="btn" onClick={() => void onSignOut()}>
@@ -106,7 +107,7 @@ export function HostedApp() {
     const failed = callbackFailed || signInFailed;
     return (
       <div className="shell hosted-session">
-        <p className="wordmark">Locus</p>
+        <BrandLockup />
         {failed ? <p className="bad" role="alert">Google sign-in failed. Try again.</p> : null}
         <button type="button" className="btn primary" onClick={() => void onGoogle()}>
           Continue with Google

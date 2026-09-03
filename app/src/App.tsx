@@ -26,6 +26,7 @@ import { HostedAccountPage } from "./hosted-account.tsx";
 import { LIBRARY_CHANGED_EVENT, notifyLibraryChanged } from "./library-events.ts";
 import { AUTHENTICATED_LIBRARY_CHANGED_EVENT, authenticatedLibraryFromEvent } from "./library-identity.ts";
 import { RUNTIME } from "./runtime.ts";
+import { BrandLockup } from "./Brand.tsx";
 
 type Route =
   | { name: "recent"; shelf: string }
@@ -342,7 +343,7 @@ export function App() {
     <div className="shell">
       <header className="masthead">
         <div>
-          <p className="wordmark">Locus</p>
+          <BrandLockup />
           <p className="lede">Your saves, in one place.</p>
         </div>
         <div className="mast-right">

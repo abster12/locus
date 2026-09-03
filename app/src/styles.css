@@ -79,8 +79,11 @@ button { cursor: pointer; }
   display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 18px;
   border-bottom: 3px double var(--ink); padding-bottom: 16px;
 }
-.wordmark { font-family: var(--display); font-size: 54px; line-height: .9; letter-spacing: -.03em; margin: 0; }
-.wordmark::after { content: "."; color: var(--accent); }
+.brand-lockup { display: inline-flex; align-items: center; gap: 11px; color: var(--ink); width: fit-content; }
+.locus-mark { display: block; width: 52px; height: 52px; flex: none; color: var(--ink); }
+.locus-mark-point { fill: var(--accent); }
+.wordmark { font-family: var(--display); font-size: 54px; line-height: .9; letter-spacing: -.03em; }
+.hosted-session .brand-lockup { margin-bottom: 4px; }
 .lede { margin: 9px 0 0; color: var(--mute); max-width: 46ch; font-size: 13.5px; }
 .mast-right { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
 .datebox {
@@ -820,6 +823,8 @@ html[data-theme="dark"] .stage-wv { background: #111; }
   .masthead { grid-template-columns: 1fr; }
   .mast-right { align-items: flex-start; }
   .wordmark { font-size: 40px; }
+  .locus-mark { width: 40px; height: 40px; }
+  .brand-lockup { gap: 9px; }
   .compass { display: none; }
   .globalsearch { min-width: 0; width: 100%; }
   .stage { left: 12px; right: 12px; width: auto; }

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/public/locus-mark.svg" width="88" height="88" alt="Locus logo">
+</p>
+
 # Locus
 
 Local desk for things you already saved.
