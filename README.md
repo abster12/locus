@@ -9,6 +9,10 @@ Private desk for things you already saved. A browser agent can work on the open 
 **Live:** [locus-identity-staging.abhigyan0987.workers.dev](https://locus-identity-staging.abhigyan0987.workers.dev) — Google sign-in. Registration stays open through 21 September 2026, 5:00 pm PDT.
 
 <p align="center">
+  <img src="app/public/readme-desk.png" alt="Locus desk with saved posts from YouTube, X, Instagram, and Reddit">
+</p>
+
+<p align="center">
   <img src="app/public/readme-trip-overview.png" alt="Locus trip overview for a Kyoto weekend">
 </p>
 
@@ -47,14 +51,7 @@ Hosted edition: Cloudflare Worker + D1. Copy [`hosted/.dev.vars.example`](hosted
 
 ## Prior work
 
-Locus existed as a local saves desk before this challenge. Git history dates the split:
-
-| When | What | Commit |
-| --- | --- | --- |
-| 2026-08-25 | Local desk, capture, in-tab viewer | [`4b7da03`](https://github.com/abster12/locus/commit/4b7da03) |
-| 2026-08-31 | Reading page-defined WebMCP | [`cb7de5b`](https://github.com/abster12/locus/commit/cb7de5b) |
-| 2026-09-01 | Kitchen WebMCP; Trips | [`3dcd5fa`](https://github.com/abster12/locus/commit/3dcd5fa), [`71e77f7`](https://github.com/abster12/locus/commit/71e77f7) |
-| 2026-09-02–03 | Hosted identity, intake WebMCP, whole app on the Worker | [`865b205`](https://github.com/abster12/locus/commit/865b205), [`f109418`](https://github.com/abster12/locus/commit/f109418), [`40ce93d`](https://github.com/abster12/locus/commit/40ce93d) |
+Before this challenge, Locus was a local-only desk: capture saves from X, Instagram, YouTube, and Reddit, keep them in a private SQLite library, and open them in-tab. Page-defined WebMCP tools and the hosted Cloudflare app were added during the challenge.
 
 ## License
 
