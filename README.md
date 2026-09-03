@@ -6,7 +6,7 @@
 
 Private desk for things you already saved. A browser agent can work on the open page through page-defined [WebMCP](https://webmachinelearning.github.io/webmcp/) tools; you keep control of drafts, recommendations, and consequential changes.
 
-**Live:** [locus-identity-staging.abhigyan0987.workers.dev](https://locus-identity-staging.abhigyan0987.workers.dev) — Google sign-in. Registration stays open through 21 September 2026, 5:00 pm PDT.
+**Live:** [locus-identity-staging.abhigyan0987.workers.dev](https://locus-identity-staging.abhigyan0987.workers.dev) — Google sign-in. 
 
 <p align="center">
   <img src="app/public/readme-desk.png" alt="Locus desk with saved posts from YouTube, X, Instagram, and Reddit">
@@ -20,7 +20,7 @@ Private desk for things you already saved. A browser agent can work on the open 
   <img src="app/public/readme-trip-day.png" alt="Locus day planner with draft stops and a hole to fill">
 </p>
 
-Saves from X, Instagram, YouTube, Reddit, or a URL you paste become Items in your Library. The same Item can be something to read, a dish to cook, a Place, or a stop on a Trip. Locus is not affiliated with those platforms. Capture reads *your* saves in *your* browser; it is optional. Judges can sign in, paste public URLs, and use WebMCP without connecting a social account or installing the extension.
+Saves from X, Instagram, YouTube, Reddit, or a URL you paste become Items in your Library. The same Item can be something to read, a dish to cook, a Place, or a stop on a Trip. Locus is not affiliated with those platforms. Capture reads *your* saves in *your* browser; it is optional. 
 
 ## WebMCP
 
