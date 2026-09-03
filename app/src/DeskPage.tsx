@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type MouseEvent } from "react";
 import { api, type ItemCard, type LinkPreview } from "./api.ts";
-import { canOpenInStage, isPlatformPermalink, isReadingItem } from "../../core/sanitize.ts";
+import { isPlatformPermalink, isReadingItem } from "../../core/sanitize.ts";
 import { SHELVES, shelfOfTag } from "../../core/categories.ts";
 import { sourceIcon, sourceLabel } from "./source-icons.ts";
 import { cardTitle, extractLinks, firstVisual, hostOf, pathOf, pubLabel, who } from "./item-content.ts";
@@ -12,6 +12,7 @@ import { ClassificationWhy } from "./ClassificationWhy.tsx";
 import { localDay } from "../../core/dates.ts";
 import { RUNTIME } from "./runtime.ts";
 import { useProse } from "./use-prose.ts";
+import { previewOpensInStage } from "./stage-navigation.ts";
 function previewUrls(item: ItemCard): { text: string; links: string[] } {
   const extracted = extractLinks(item.body);
   if (isPlatformPermalink(item.url)) {
@@ -33,25 +34,34 @@ function Avatar({ item }: { item: ItemCard }) {
   return <span className="avatar">{name.charAt(0).toUpperCase() || "?"}</span>;
 }
 
-function pickLink(e: MouseEvent<HTMLAnchorElement>, url: string, onPick: (url: string) => void) {
+function pickLink(
+  e: MouseEvent<HTMLAnchorElement>,
+  url: string,
+  permalink: string,
+  onPick: (url: string) => void,
+) {
   e.stopPropagation();
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+  // Hosted Stage never mounts a live page, and a save's own permalink (or a
+  // social URL) cannot sit in a frame. Leave the <a> alone so the preview
+  // opens the URL instead of a Stage that cannot show it.
+  if (RUNTIME === "hosted" || !previewOpensInStage(url, permalink)) return;
   e.preventDefault();
   onPick(url);
 }
 
-function LinkCards({ links, onPick }: { links: string[]; onPick: (url: string) => void }) {
+function LinkCards({ links, permalink, onPick }: { links: string[]; permalink: string; onPick: (url: string) => void }) {
   if (links.length === 0) return null;
   return (
     <div className="linkcards">
       {links.map((u) => (
-        <LinkPreviewCard key={u} url={u} onPick={onPick} />
+        <LinkPreviewCard key={u} url={u} permalink={permalink} onPick={onPick} />
       ))}
     </div>
   );
 }
 
-function LinkPreviewCard({ url, onPick }: { url: string; onPick: (url: string) => void }) {
+function LinkPreviewCard({ url, permalink, onPick }: { url: string; permalink: string; onPick: (url: string) => void }) {
   const card = useRef<HTMLAnchorElement>(null);
   const [nearViewport, setNearViewport] = useState(false);
   useEffect(() => {
@@ -83,7 +93,7 @@ function LinkPreviewCard({ url, onPick }: { url: string; onPick: (url: string) =
   );
   if (p && usefulPreview(p, url)) {
     return (
-      <a ref={card} className="linkcard rich" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => pickLink(e, url, onPick)}>
+      <a ref={card} className="linkcard rich" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => pickLink(e, url, permalink, onPick)}>
         {p.image ? <img className="lc-img" src={p.image} alt="" referrerPolicy="no-referrer" loading="lazy" /> : mono}
         <span className="lc-text">
           <span className="lc-host">{p.siteName || host}</span>
@@ -95,7 +105,7 @@ function LinkPreviewCard({ url, onPick }: { url: string; onPick: (url: string) =
     );
   }
   return (
-    <a ref={card} className="linkcard" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => pickLink(e, url, onPick)}>
+    <a ref={card} className="linkcard" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => pickLink(e, url, permalink, onPick)}>
       {mono}
       <span className="lc-text">
         <span className="lc-host">{host}</span>
@@ -359,8 +369,8 @@ function PostCard({
       </header>
       {showTitle ? <h3>{title}</h3> : null}
       {text ? <Excerpt text={text} /> : null}
-      {visual ? <CapturedMedia item={item} /> : links.length ? <LinkCards links={links} onPick={(url) => onOpen(item, url)} /> : <Poster {...deskPoster(item)} />}
-      {visual ? <LinkCards links={links} onPick={(url) => onOpen(item, url)} /> : null}
+      {visual ? <CapturedMedia item={item} /> : links.length ? <LinkCards links={links} permalink={item.url} onPick={(url) => onOpen(item, url)} /> : <Poster {...deskPoster(item)} />}
+      {visual ? <LinkCards links={links} permalink={item.url} onPick={(url) => onOpen(item, url)} /> : null}
       <footer className="post-foot">
         <div className="tags">
           {item.status !== "inbox" ? <span className={`status status-${item.status}`}>{item.status === "accepted" ? "Accepted" : item.status}</span> : null}

@@ -1,5 +1,5 @@
 import type { ItemCard } from "./api.ts";
-import { isPlatformPermalink, outboundUrls } from "../../core/sanitize.ts";
+import { canOpenInStage, isPlatformPermalink, neverFrame, outboundUrls } from "../../core/sanitize.ts";
 
 export type FrameCheckResult = "yes" | "no" | "unknown";
 
@@ -14,6 +14,11 @@ export function firstStageDestination(item: Pick<ItemCard, "body" | "url">): str
   } catch {
     return undefined;
   }
+}
+
+/** Desk link previews intercept into Stage only when Stage can actually show the page. */
+export function previewOpensInStage(url: string, permalink: string): boolean {
+  return canOpenInStage(url, permalink) && !neverFrame(url);
 }
 
 /** Only mount a live iframe after the server positively verifies it is frameable. */
