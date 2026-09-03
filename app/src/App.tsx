@@ -18,7 +18,8 @@ import { TripsPage } from "./TripsPage.tsx";
 import { CollectionsPage } from "./CollectionsPage.tsx";
 import { SaveLinkDialog } from "./SaveLinkPage.tsx";
 import { IntakeDraftsSheet } from "./intake-drafts-sheet.tsx";
-import { attachLibraryIntakeWebmcp, type IntakeWebmcpHost } from "./library-intake-webmcp.ts";
+import { attachLibraryIntakeWebmcp, detectLibraryIntakeWebmcpRuntime, type IntakeWebmcpHost } from "./library-intake-webmcp.ts";
+import { PageAgentBanner } from "./page-agent-banner.tsx";
 import { SummaryPage } from "./SummaryPage.tsx";
 import { canMountLiveFrame, firstStageDestination } from "./stage-navigation.ts";
 import { localDay } from "../../core/dates.ts";
@@ -27,6 +28,8 @@ import { LIBRARY_CHANGED_EVENT, notifyLibraryChanged } from "./library-events.ts
 import { AUTHENTICATED_LIBRARY_CHANGED_EVENT, authenticatedLibraryFromEvent } from "./library-identity.ts";
 import { RUNTIME } from "./runtime.ts";
 import { BrandLockup } from "./Brand.tsx";
+import { ExampleAccountPage, ExampleBanner } from "./ExampleBanner.tsx";
+import { isExampleActive } from "./example-library.ts";
 
 type Route =
   | { name: "recent"; shelf: string }
@@ -289,13 +292,22 @@ export function App() {
     drafts: PresentedIntakeDraft[];
     context: IntakeContext;
   } | null>(null);
+  const [intakeWebmcpReady, setIntakeWebmcpReady] = useState(false);
   const intakeSurface = isIntakeSurface(route.name);
+  const deskIntakeBanner =
+    route.name === "recent" ||
+    route.name === "inbox" ||
+    route.name === "search" ||
+    route.name === "collections" ||
+    route.name === "collection";
 
   useEffect(() => {
     if (!ready || !libraryIdentity || !intakeSurface) {
       setIntakeDrafts(null);
+      setIntakeWebmcpReady(false);
       return;
     }
+    setIntakeWebmcpReady(detectLibraryIntakeWebmcpRuntime() != null);
     let presentedContext: IntakeContext | null = null;
     const host: IntakeWebmcpHost = {
       getContext: () => api.intakeContext(),
@@ -410,6 +422,7 @@ export function App() {
           </div>
         </div>
       </header>
+      {isExampleActive() ? <ExampleBanner /> : null}
       {RUNTIME !== "hosted" ? <CaptureBanner /> : null}
       <nav className="tabs">
         <Tab href="#/recent" active={deskActive}>
@@ -443,6 +456,7 @@ export function App() {
           Account
         </Tab>
       </nav>
+      {deskIntakeBanner && intakeWebmcpReady ? <PageAgentBanner surface="desk" /> : null}
       {route.name === "recent" && <ItemList view="recent" initialShelf={route.shelf} onOpen={openStage} />}
       {route.name === "inbox" && <ItemList view="inbox" initialShelf={route.shelf} onOpen={openStage} />}
       {route.name === "save" ? (
@@ -457,7 +471,7 @@ export function App() {
       {route.name === "search" && <ItemList view="search" initialQ={route.q} onOpen={openStage} />}
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
-      {route.name === "account" && (RUNTIME === "hosted" ? <HostedAccountPage /> : <SourcesPage />)}
+      {route.name === "account" && (isExampleActive() ? <ExampleAccountPage /> : RUNTIME === "hosted" ? <HostedAccountPage /> : <SourcesPage />)}
       {route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
       {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
       {route.name === "kitchen" && <KitchenPage />}

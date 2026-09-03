@@ -132,6 +132,10 @@ test("trips page registers three index tools and nine document tools, applies ex
       3,
       "one registration cycle of three on the index",
     );
+    assert.equal(
+      await page.$eval("[data-agent-banner=trips] .reading-agent-title", (node) => node.textContent?.trim()),
+      "Your browser agent can help plan a trip",
+    );
 
     // list_trips: bounded summaries for this Library only.
     const listed = (await invokeTool(page, "list_trips", {})) as { ok: boolean; trips: Array<{ id: string; title: string }> };
@@ -148,6 +152,12 @@ test("trips page registers three index tools and nine document tools, applies ex
     assert.equal(
       await page.evaluate(() => (window as unknown as WebmcpWindow).__locusTripsRegsState?.count),
       12,
+    );
+    await page.waitForSelector("[data-agent-banner=trip]");
+    assert.equal(await page.$("[data-agent-banner=trips]"), null);
+    assert.equal(
+      await page.$eval("[data-agent-banner=trip] .reading-agent-title", (node) => node.textContent?.trim()),
+      "Your browser agent can help with this trip",
     );
 
     // get_trip: the exact visible document without session data.

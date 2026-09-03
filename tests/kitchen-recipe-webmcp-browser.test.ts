@@ -130,6 +130,14 @@ test("kitchen detail registers the two Recipe Document tools, proposes a grounde
       { timeout: 5000 },
     );
     assert.deepEqual(await toolNames(), RECIPE_TOOLS, "detail registers exactly the two Recipe Document tools");
+    assert.equal(
+      await page.$eval("[data-agent-banner=kitchenItem] .reading-agent-title", (node) => node.textContent?.trim()),
+      "Your browser agent can help with this recipe",
+    );
+    assert.match(
+      await page.$eval("[data-agent-banner=kitchenItem] .reading-agent-copy", (node) => node.textContent ?? ""),
+      /cannot mark the recipe Reviewed/,
+    );
     assert.equal(await regCount(), 2, "one registration cycle of two on first mount");
 
     // get_recipe_source: bounded stored source for the one visible Item.

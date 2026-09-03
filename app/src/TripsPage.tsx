@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type TripSetupBody } from "./api.ts";
-import { attachTripsWebmcp, type TripsWebmcpHost } from "./trips-webmcp.ts";
+import { attachTripsWebmcp, detectTripsWebmcpRuntime, type TripsWebmcpHost } from "./trips-webmcp.ts";
 import { TripSetupPage, TripsIndex } from "./trips-index.tsx";
 import { TripDocumentPage } from "./trips-document.tsx";
 
@@ -24,6 +24,7 @@ export function TripsPage({
   // Armed review is trip-bound: a late arm for a previous document must not
   // expose the tool on a different Trip. Opening a trip never sets this.
   const [armedTripId, setArmedTripId] = useState<string | null>(null);
+  const [webmcpReady, setWebmcpReady] = useState(false);
   useEffect(() => {
     setArmedTripId(null);
   }, [mode, tripId]);
@@ -34,6 +35,7 @@ export function TripsPage({
   // and removed when the user leaves Trips. The host calls the same HTTP API
   // the page itself uses, so session and CSRF handling stay identical.
   useEffect(() => {
+    setWebmcpReady(detectTripsWebmcpRuntime() != null);
     const host: TripsWebmcpHost = {
       surface: () => (mode === "document" ? "document" : mode === "setup" ? "setup" : "index"),
       getVisibleTripId: () => visibleRef.current,
@@ -74,10 +76,11 @@ export function TripsPage({
         tripId={tripId ?? ""}
         view={documentView}
         reviewRequested={reviewRequested}
+        webmcpReady={webmcpReady}
         onRequestReview={(id) => {
           if (id === visibleRef.current) setArmedTripId(id);
         }}
       />
     );
-  return <TripsIndex filter={filter} />;
+  return <TripsIndex filter={filter} webmcpReady={webmcpReady} />;
 }

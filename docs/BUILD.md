@@ -3,7 +3,8 @@
 Requires Node 22.5+ and, for live capture, installed Google Chrome.
 
 ```bash
-cd /Users/abhigyan/Desktop/Dev/locus
+git clone https://github.com/abster12/locus.git
+cd locus
 npm install
 npm test
 npm run dev

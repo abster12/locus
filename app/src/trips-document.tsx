@@ -10,6 +10,7 @@ import type { OpenAdd } from "./trips-stop-ops.ts";
 import { TripAdvisories } from "./trips-advisories.tsx";
 import { ExportControl, ShareButton, SharePreviewPanel, ShareStatus, useTripShare } from "./trips-share.tsx";
 import { parseRecommendations, RecommendationDrawer, type TripRecommendations } from "./trips-recommendations.tsx";
+import { PageAgentBanner } from "./page-agent-banner.tsx";
 
 export type TripViewKind = { view: "overview" | "schedule" | "day"; dayId: string | null };
 
@@ -308,11 +309,13 @@ export function TripDocumentPage({
   view,
   reviewRequested,
   onRequestReview,
+  webmcpReady = false,
 }: {
   tripId: string;
   view: string;
   reviewRequested: boolean;
   onRequestReview: (tripId: string) => void;
+  webmcpReady?: boolean;
 }) {
   const [trip, setTrip] = useState<TripDocument | null>(null);
   const [missing, setMissing] = useState(false);
@@ -441,6 +444,7 @@ export function TripDocumentPage({
         <p className="pagesub">
           <a href="#/trips">Back to Trips</a>
         </p>
+        {webmcpReady ? <PageAgentBanner surface="trip" /> : null}
       </div>
       {err ? (
         <p className="bad" role="alert">

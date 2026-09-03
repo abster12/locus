@@ -16,9 +16,11 @@ import {
 } from "./kitchen-recipe-webmcp.ts";
 import {
   attachKitchenTonightWebmcp,
+  detectKitchenTonightWebmcpRuntime,
   type KitchenTonightWebmcpHost,
   type KitchenTonightWebmcpItemSummary,
 } from "./kitchen-tonight-webmcp.ts";
+import { PageAgentBanner } from "./page-agent-banner.tsx";
 import { SourceMark } from "./SourceMark.tsx";
 import { instagramEmbedUrl, youtubeEmbedUrl } from "../../core/sanitize.ts";
 
@@ -92,6 +94,7 @@ export function KitchenPage() {
   const [notice, setNotice] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [pane, setPane] = useState<"recipes" | "tonight">("recipes");
+  const [webmcpReady, setWebmcpReady] = useState(false);
   const searchTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -141,6 +144,7 @@ export function KitchenPage() {
   const queryRef = useRef(query);
   queryRef.current = query;
   useEffect(() => {
+    setWebmcpReady(detectKitchenTonightWebmcpRuntime() != null);
     const host: KitchenTonightWebmcpHost = {
       getPageFilters: () => ({ q: queryRef.current.q, source: queryRef.current.source }),
       getTonight: async () => {
@@ -270,6 +274,7 @@ export function KitchenPage() {
           {countLine ? <span className="count">{countLine}</span> : null}
         </div>
         <p className="pagesub">Food saves, ready when you are.</p>
+        {webmcpReady ? <PageAgentBanner surface="kitchen" /> : null}
         <div className="kitchen-controls">
           <label className="kitchen-search">
             <span className="visually-hidden">Search recipes</span>
@@ -686,38 +691,48 @@ export function KitchenDetail({ itemId, mode }: { itemId: string; mode: "auto" |
       </button>
     );
 
+  const recipeBanner = webmcpReady ? <PageAgentBanner surface="kitchenItem" /> : null;
   if (mode === "edit") {
     return (
-      <RecipeEditor
-        key={reloadKey}
-        data={data}
-        notice={notice}
-        tonightButton={tonightButton}
-        onDone={() => go(`#/kitchen/${itemId}`)}
-        onRemoved={() => go(`#/kitchen/${itemId}`)}
-      />
+      <>
+        {recipeBanner}
+        <RecipeEditor
+          key={reloadKey}
+          data={data}
+          notice={notice}
+          tonightButton={tonightButton}
+          onDone={() => go(`#/kitchen/${itemId}`)}
+          onRemoved={() => go(`#/kitchen/${itemId}`)}
+        />
+      </>
     );
   }
   if (mode === "watch" || (mode === "auto" && !data.recipe)) {
     return (
-      <WatchCook
-        data={data}
-        notice={notice}
-        tonightButton={tonightButton}
-        onCreated={() => setReloadKey((key) => key + 1)}
-        webmcpReady={webmcpReady}
-        generationAllowed={generationAllowed}
-        setGenerationConsent={setGenerationConsent}
-      />
+      <>
+        {recipeBanner}
+        <WatchCook
+          data={data}
+          notice={notice}
+          tonightButton={tonightButton}
+          onCreated={() => setReloadKey((key) => key + 1)}
+          webmcpReady={webmcpReady}
+          generationAllowed={generationAllowed}
+          setGenerationConsent={setGenerationConsent}
+        />
+      </>
     );
   }
   return (
-    <RecipeScoreView
-      data={data}
-      document={data.recipe as RecipeDocument}
-      notice={notice}
-      tonightButton={tonightButton}
-    />
+    <>
+      {recipeBanner}
+      <RecipeScoreView
+        data={data}
+        document={data.recipe as RecipeDocument}
+        notice={notice}
+        tonightButton={tonightButton}
+      />
+    </>
   );
 }
 

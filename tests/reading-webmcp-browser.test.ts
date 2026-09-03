@@ -153,8 +153,12 @@ test("reading page registers four WebMCP tools, renders presented recommendation
     assert.equal(context1.webmcpActive, true);
 
     assert.equal(
-      await page.$eval(".reading-agent-title", (node) => node.textContent?.trim()),
+      await page.$eval("[data-agent-banner=reading] .reading-agent-title", (node) => node.textContent?.trim()),
       "Your browser agent can help with your reading",
+    );
+    assert.equal(
+      await page.$eval("[data-agent-banner=reading] .reading-agent-tools", (node) => (node as HTMLDetailsElement).open),
+      false,
     );
 
     // search_reading: defaults from page context, real saved documents.

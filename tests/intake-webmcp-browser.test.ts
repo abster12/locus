@@ -86,6 +86,14 @@ test("Library intake tools register on Desk, present drafts without saving, and 
       FOUR_TOOLS,
     );
     assert.equal(await page.evaluate(() => (window as unknown as WebmcpWindow).__locusIntakeRegsState?.count), 4);
+    assert.equal(
+      await page.$eval("[data-agent-banner=desk] .reading-agent-title", (node) => node.textContent?.trim()),
+      "Your browser agent can help with this desk",
+    );
+    assert.match(
+      await page.$eval("[data-agent-banner=desk] .reading-agent-copy", (node) => node.textContent ?? ""),
+      /Nothing becomes an Item until you confirm/,
+    );
 
     const context = (await invokeTool(page, "get_library_intake_context", {})) as {
       ok: boolean;

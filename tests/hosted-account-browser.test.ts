@@ -25,12 +25,14 @@ const LOCAL_API = /^\/api\/(export|imports|settings|library|pair|extension)/;
 const stub = {
   mode: "signed-out" as "signed-out" | "signed-in" | "denied" | "fail" | "expire",
   calls: 0,
+  itemTotal: 0,
   localApis: [] as string[],
 };
 
-function resetStub(mode: typeof stub.mode) {
+function resetStub(mode: typeof stub.mode, itemTotal = 0) {
   stub.mode = mode;
   stub.calls = 0;
+  stub.itemTotal = itemTotal;
   stub.localApis = [];
 }
 
@@ -89,7 +91,7 @@ function handle(req: IncomingMessage, res: ServerResponse) {
     sendJson(res, 200, {
       items: [],
       nextCursor: null,
-      counts: { total: 0, inbox: 0, shelves: {} },
+      counts: { total: stub.itemTotal, inbox: 0, shelves: {} },
     });
     return;
   }
@@ -171,18 +173,72 @@ after(async () => {
 });
 
 test.describe("hosted account", { concurrency: false }, () => {
-test("signed-out hosted shell is Google only", async () => {
+test("signed-out hosted shell is the landing door", async () => {
   resetStub("signed-out");
   const page = await openPage();
   try {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
-    await page.waitForSelector(".hosted-session .btn.primary", { timeout: 5000 });
+    await page.waitForSelector("[data-page=landing]", { timeout: 5000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
-    assert.match(text, /Continue with Google/);
+    assert.match(text, /The desk for the life you already saved/);
+    assert.match(text, /Try the example library/);
+    assert.match(text, /Get started/);
+    assert.doesNotMatch(text, /Continue with Google/);
     assert.doesNotMatch(text, /Ada/);
     assert.doesNotMatch(text, /ada@example.com/);
-    assert.doesNotMatch(text, /Desk/);
     assert.doesNotMatch(text, /Capture setup/);
+    assert.equal(await page.$("nav.tabs"), null);
+    assert.equal(await page.$("#hosted-account"), null);
+    assert.equal(stub.localApis.length, 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("Get started is Continue with Google", async () => {
+  resetStub("signed-out");
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForSelector("[data-act=signin]", { timeout: 5000 });
+    await page.click("[data-act=signin]");
+    await page.waitForSelector("[data-page=signin] [data-act=google]", { timeout: 5000 });
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /Continue with Google/);
+    assert.match(text, /Sign in to open your desk/);
+    assert.doesNotMatch(text, /Desk/);
+    assert.equal(stub.localApis.length, 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("empty Library at \/ opens Account", async () => {
+  resetStub("signed-in", 0);
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForSelector("#hosted-account", { timeout: 5000 });
+    assert.match(page.url(), /#\/account/);
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /Capture setup/);
+    assert.match(text, /Ada Lovelace/);
+    assert.equal(stub.localApis.length, 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("Library with Items at \/ opens Desk", async () => {
+  resetStub("signed-in", 4);
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Desk"), { timeout: 5000 });
+    assert.match(page.url(), /#\/recent/);
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.doesNotMatch(text, /Capture setup/);
+    assert.doesNotMatch(text, /Continue with Google/);
     assert.equal(stub.localApis.length, 0);
   } finally {
     await page.close();
@@ -190,7 +246,7 @@ test("signed-out hosted shell is Google only", async () => {
 });
 
 test("signed-in hosted App shows the live tabs and Google Account", async () => {
-  resetStub("signed-in");
+  resetStub("signed-in", 1);
   const page = await openPage();
   try {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
@@ -226,15 +282,17 @@ test("signed-in hosted App shows the live tabs and Google Account", async () => 
   }
 });
 
-test("sign-out returns to the Google entry without a reload", async () => {
+test("sign-out returns to landing without a reload", async () => {
   resetStub("signed-in");
   const page = await openPage();
   try {
     await page.goto(`${BASE}/#/account`, { waitUntil: "load" });
     await page.waitForSelector("#hosted-account", { timeout: 5000 });
     await page.click("#hosted-account .btn");
-    await page.waitForSelector(".hosted-session .btn.primary", { timeout: 5000 });
+    await page.waitForSelector("[data-page=landing]", { timeout: 5000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /The desk for the life you already saved/);
+    assert.doesNotMatch(text, /Continue with Google/);
     assert.doesNotMatch(text, /Ada Lovelace/);
     assert.doesNotMatch(text, /Ada's Library/);
     assert.equal(stub.localApis.length, 0);
@@ -249,8 +307,9 @@ test("an expired session returns to signed out", async () => {
   try {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
     await page.waitForFunction(() => (document.body.textContent ?? "").includes("Desk"), { timeout: 5000 });
-    await page.waitForSelector(".hosted-session .btn.primary", { timeout: 8000 });
+    await page.waitForSelector("[data-page=landing]", { timeout: 8000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /The desk for the life you already saved/);
     assert.doesNotMatch(text, /Ada Lovelace/);
     assert.equal(stub.localApis.length, 0);
   } finally {
@@ -270,7 +329,7 @@ test("disabled access is denied and can sign out", async () => {
     assert.doesNotMatch(text, /Ada's Library/);
     assert.doesNotMatch(text, /Continue with Google/);
     await page.click(".hosted-session .btn");
-    await page.waitForSelector(".hosted-session .btn.primary", { timeout: 5000 });
+    await page.waitForSelector("[data-page=landing]", { timeout: 5000 });
     assert.equal(stub.localApis.length, 0);
   } finally {
     await page.close();
@@ -282,7 +341,7 @@ test("callback failure is generic and stripped from the URL", async () => {
   const page = await openPage();
   try {
     await page.goto(`${BASE}/?error=access_denied&error_description=denied`, { waitUntil: "load" });
-    await page.waitForSelector(".hosted-session .btn.primary", { timeout: 5000 });
+    await page.waitForSelector("[data-page=signin] [data-act=google]", { timeout: 5000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
     assert.match(text, /Google sign-in failed/);
     assert.match(text, /Continue with Google/);
@@ -301,31 +360,121 @@ test("Retry recovers from a load failure", async () => {
     await page.waitForFunction(() => (document.body.textContent ?? "").includes("Could not load session."), { timeout: 5000 });
     stub.mode = "signed-out";
     await page.click(".hosted-session .btn.primary");
-    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Continue with Google"), { timeout: 5000 });
+    await page.waitForSelector("[data-page=landing]", { timeout: 5000 });
     assert.equal(stub.localApis.length, 0);
   } finally {
     await page.close();
   }
 });
 
-test("Continue with Google is keyboard reachable and the shell holds at 320", async () => {
+test("Get started is keyboard reachable and landing holds at 320", async () => {
   resetStub("signed-out");
   const page = await openPage();
   try {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
-    await page.waitForSelector(".hosted-session .btn.primary", { timeout: 5000 });
-    await page.focus(".hosted-session .btn.primary");
-    assert.equal(
-      await page.evaluate(() => document.activeElement?.textContent?.trim()),
-      "Continue with Google",
-    );
+    await page.waitForSelector("[data-act=signin]", { timeout: 5000 });
     await page.setViewport({ width: 320, height: 800 });
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
       true,
       "no overflow at 320px",
     );
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.focus("[data-act=signin]");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.textContent?.trim()),
+      "Get started",
+    );
+    await page.click("[data-act=signin]");
+    await page.waitForSelector("[data-page=signin] [data-act=google]", { timeout: 5000 });
+    await page.focus("[data-page=signin] [data-act=google]");
+    assert.match(
+      await page.evaluate(() => document.activeElement?.textContent ?? ""),
+      /Continue with Google/,
+    );
+    await page.setViewport({ width: 320, height: 800 });
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1),
+      true,
+      "signin holds at 320px",
+    );
     assert.equal(stub.localApis.length, 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("Try the example library opens the real App with sample Items", async () => {
+  resetStub("signed-out");
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForSelector("[data-page=landing] [data-act=example]", { timeout: 5000 });
+    await page.click("[data-page=landing] .landing-actions [data-act=example]");
+    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Cacio e pepe for two"), { timeout: 5000 });
+    await page.waitForSelector("[data-example-banner]", { timeout: 5000 });
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /Example library/);
+    assert.match(text, /not your captures/);
+    assert.match(text, /Desk/);
+    assert.match(text, /Kitchen/);
+    assert.doesNotMatch(text, /Ada Lovelace/);
+    assert.match(page.url(), /#\/recent/);
+    assert.equal(stub.localApis.length, 0);
+  } finally {
+    await page.close();
+  }
+});
+
+test("life columns open the matching room", async () => {
+  resetStub("signed-out");
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForSelector("[data-room=kitchen]", { timeout: 5000 });
+    await page.click("[data-room=kitchen]");
+    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Recipe Box") || (document.body.textContent ?? "").includes("food saves"), { timeout: 5000 });
+    assert.match(page.url(), /#\/kitchen/);
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /Cacio e pepe for two/);
+    assert.match(text, /Example library/);
+  } finally {
+    await page.close();
+  }
+});
+
+test("example Get started is Google, not a skip", async () => {
+  resetStub("signed-out");
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForSelector("[data-page=landing] .landing-actions [data-act=example]", { timeout: 5000 });
+    await page.click("[data-page=landing] .landing-actions [data-act=example]");
+    await page.waitForSelector("[data-example-banner] [data-act=signin]", { timeout: 5000 });
+    await page.click("[data-example-banner] [data-act=signin]");
+    await page.waitForSelector("[data-page=signin] [data-act=google]", { timeout: 5000 });
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /Continue with Google/);
+    assert.equal(await page.$("nav.tabs"), null);
+    assert.doesNotMatch(text, /Cacio e pepe/);
+  } finally {
+    await page.close();
+  }
+});
+
+test("example Back to landing drops the in-tab library", async () => {
+  resetStub("signed-out");
+  const page = await openPage();
+  try {
+    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForSelector("[data-page=landing] .landing-actions [data-act=example]", { timeout: 5000 });
+    await page.click("[data-page=landing] .landing-actions [data-act=example]");
+    await page.waitForSelector("[data-act=example-back]", { timeout: 5000 });
+    await page.click("[data-act=example-back]");
+    await page.waitForSelector("[data-page=landing]", { timeout: 5000 });
+    assert.equal(await page.$("nav.tabs"), null);
+    const text = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(text, /The desk for the life you already saved/);
   } finally {
     await page.close();
   }

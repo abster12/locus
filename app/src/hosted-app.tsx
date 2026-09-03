@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { App } from "./App.tsx";
-import { setApiCsrf } from "./api.ts";
+import { api, setApiCsrf } from "./api.ts";
 import { HostedAuthContext } from "./hosted-auth.ts";
+import { hostedDefaultHash } from "./hosted-entry.ts";
+import {
+  enterExample,
+  exampleGeneration,
+  exitExample,
+} from "./example-library.ts";
+import { LandingPage } from "./LandingPage.tsx";
 import {
   consumeCallbackError,
   loadSession,
@@ -16,6 +23,11 @@ export function HostedApp() {
   const [callbackFailed, setCallbackFailed] = useState(false);
   const [signInFailed, setSignInFailed] = useState(false);
   const [signOutFailed, setSignOutFailed] = useState(false);
+  const [signInBusy, setSignInBusy] = useState(false);
+  const [signedOutView, setSignedOutView] = useState<"landing" | "signin">("landing");
+  const [entryReady, setEntryReady] = useState(false);
+  const [exampleOn, setExampleOn] = useState(false);
+  const [exampleGen, setExampleGen] = useState(0);
 
   async function refresh() {
     const next = await loadSession("hosted");
@@ -27,8 +39,58 @@ export function HostedApp() {
   useEffect(() => {
     if (consumeCallbackError(new URL(location.href), (href) => history.replaceState(null, "", href))) {
       setCallbackFailed(true);
+      setSignedOutView("signin");
     }
     void refresh();
+  }, []);
+
+  const readyLibraryId = session?.kind === "hosted-ready" ? session.library.id : null;
+
+  useEffect(() => {
+    if (!readyLibraryId) {
+      setEntryReady(false);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const raw = location.hash.replace(/^#/, "");
+      let total = 1;
+      if (raw === "" || raw === "/") {
+        try {
+          total = (await api.itemCounts()).counts.total;
+        } catch {
+          total = 1;
+        }
+      }
+      const next = hostedDefaultHash(location.hash, total);
+      const dest = `${location.pathname}${location.search}${next}`;
+      const current = `${location.pathname}${location.search}${location.hash}`;
+      if (dest !== current) history.replaceState(null, "", dest);
+      if (alive) setEntryReady(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [readyLibraryId]);
+
+  useEffect(() => {
+    const leaveExample = (next: "landing" | "signin") => {
+      exitExample();
+      setExampleOn(false);
+      setSignedOutView(next);
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+    };
+    const onReset = () => setExampleGen(exampleGeneration());
+    const onExit = () => leaveExample("landing");
+    const onGetStarted = () => leaveExample("signin");
+    window.addEventListener("locus:example-reset", onReset);
+    window.addEventListener("locus:example-exit", onExit);
+    window.addEventListener("locus:example-get-started", onGetStarted);
+    return () => {
+      window.removeEventListener("locus:example-reset", onReset);
+      window.removeEventListener("locus:example-exit", onExit);
+      window.removeEventListener("locus:example-get-started", onGetStarted);
+    };
   }, []);
 
   useEffect(() => {
@@ -50,8 +112,10 @@ export function HostedApp() {
 
   async function onGoogle() {
     setSignInFailed(false);
+    setSignInBusy(true);
     const result = await startGoogleSignIn();
     if (!result.ok) {
+      setSignInBusy(false);
       setSignInFailed(true);
       return;
     }
@@ -66,6 +130,10 @@ export function HostedApp() {
       return;
     }
     setApiCsrf("");
+    setSignInBusy(false);
+    setSignInFailed(false);
+    setCallbackFailed(false);
+    setSignedOutView("landing");
     setSession({ kind: "hosted-signed-out" });
   }
 
@@ -103,20 +171,45 @@ export function HostedApp() {
     );
   }
 
+  if (session.kind === "hosted-signed-out" && exampleOn) {
+    return <App key={exampleGen} />;
+  }
+
   if (session.kind === "hosted-signed-out") {
-    const failed = callbackFailed || signInFailed;
     return (
-      <div className="shell hosted-session">
-        <BrandLockup />
-        {failed ? <p className="bad" role="alert">Google sign-in failed. Try again.</p> : null}
-        <button type="button" className="btn primary" onClick={() => void onGoogle()}>
-          Continue with Google
-        </button>
-      </div>
+      <LandingPage
+        view={signedOutView}
+        signInFailed={callbackFailed || signInFailed}
+        signInBusy={signInBusy}
+        onGetStarted={() => {
+          setSignInFailed(false);
+          setSignedOutView("signin");
+        }}
+        onGoogle={() => void onGoogle()}
+        onBack={() => {
+          setSignInFailed(false);
+          setCallbackFailed(false);
+          setSignedOutView("landing");
+        }}
+        onTryExample={(room) => {
+          enterExample(room);
+          setExampleGen(exampleGeneration());
+          setExampleOn(true);
+        }}
+      />
     );
   }
 
   if (session.kind !== "hosted-ready") return null;
+
+  if (!entryReady) {
+    return (
+      <div className="shell hosted-session">
+        <BrandLockup />
+        <p className="quiet">Checking session…</p>
+      </div>
+    );
+  }
 
   return (
     <HostedAuthContext.Provider

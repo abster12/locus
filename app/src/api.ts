@@ -1,6 +1,7 @@
 // The setup contract is owned by the server codec; these are type-only
 // imports so the browser bundle never executes server policy code.
 import type { TripContext, TripSetupInput } from "../../server/trips/policy.ts";
+import { EXAMPLE_CSRF, EXAMPLE_LIBRARY_ID, exampleRequest, isExampleActive } from "./example-library.ts";
 import { RUNTIME } from "./runtime.ts";
 import { loadSession } from "./session.ts";
 
@@ -270,6 +271,7 @@ function errorFrom(res: Response, data: unknown): Error {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  if (isExampleActive()) return exampleRequest<T>(path, init);
   const res = await fetch(path, { ...init, headers: apiHeaders(init), credentials: "same-origin" });
   const text = await res.text();
   let data: unknown = null;
@@ -294,6 +296,10 @@ export function setApiCsrf(token: string): void {
 }
 
 export async function boot(): Promise<SessionContext> {
+  if (isExampleActive()) {
+    csrf = EXAMPLE_CSRF;
+    return { csrf: EXAMPLE_CSRF, libraryId: EXAMPLE_LIBRARY_ID };
+  }
   const state = await loadSession(RUNTIME);
   if (state.kind !== "local-ready" && state.kind !== "hosted-ready") {
     throw new Error("Could not load session.");

@@ -141,6 +141,22 @@ test("kitchen index registers the three Tonight tools, composes Tonight atomical
       { timeout: 5000 },
     );
     assert.deepEqual(await toolNames(), TONIGHT_TOOLS, "the Kitchen index registers exactly the three Tonight tools");
+    assert.equal(
+      await page.$eval("[data-agent-banner=kitchen] .reading-agent-title", (node) => node.textContent?.trim()),
+      "Your browser agent can help with tonight",
+    );
+    assert.match(
+      await page.$eval("[data-agent-banner=kitchen] .reading-agent-copy", (node) => node.textContent ?? ""),
+      /put something on Tonight/,
+    );
+    assert.equal(
+      await page.$eval("[data-agent-banner=kitchen] .reading-agent-copy", (node) => /get_tonight|apply_tonight_changes/.test(node.textContent ?? "")),
+      false,
+    );
+    assert.equal(
+      await page.$eval("[data-agent-banner=kitchen] .reading-agent-tools", (node) => (node as HTMLDetailsElement).open),
+      false,
+    );
 
     const initial = (await invokeTool(page, "get_tonight", {})) as {
       ok: boolean;
@@ -232,6 +248,12 @@ test("kitchen index registers the three Tonight tools, composes Tonight atomical
       { timeout: 5000 },
     );
     assert.deepEqual(await toolNames(), RECIPE_TOOLS, "the detail route replaces Tonight tools with the Recipe Document tools");
+    await page.waitForSelector("[data-agent-banner=kitchenItem]");
+    assert.equal(await page.$("[data-agent-banner=kitchen]"), null);
+    assert.equal(
+      await page.$eval("[data-agent-banner=kitchenItem] .reading-agent-title", (node) => node.textContent?.trim()),
+      "Your browser agent can help with this recipe",
+    );
 
     // 7. Back on the index the Tonight tools register once more without
     // duplicates, and the composed list survives the round trip.
@@ -377,6 +399,34 @@ test("apply_tonight_changes converges the rail after a lost response and never p
       assert.equal(await tonightRows(), 3, "the rail keeps the newest state, never the old receipt snapshot");
     }
     assert.match(await railText(), /Dal fry recipe/);
+  } finally {
+    await browser.close();
+    await app.close();
+    db.close();
+  }
+});
+
+test("?tools=1 opens Kitchen page-tool identifiers", async () => {
+  if (!existsSync(CHROME)) assert.fail(`Chrome not found at ${CHROME}; install Google Chrome to run this smoke test.`);
+  const { listen } = await import("../server/http/server.ts");
+  const db = mem();
+  seed(db);
+  const app = listen(db);
+  const base = `http://127.0.0.1:${app.port}`;
+  const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ["--no-sandbox"] });
+  try {
+    const page = await browser.newPage();
+    await page.evaluateOnNewDocument(FAKE_WEBMCP_RUNTIME);
+    await page.goto(`${base}/?tools=1#/kitchen`, { waitUntil: "networkidle0" });
+    await page.waitForSelector("[data-agent-banner=kitchen] .reading-agent-tools");
+    assert.equal(
+      await page.$eval("[data-agent-banner=kitchen] .reading-agent-tools", (node) => (node as HTMLDetailsElement).open),
+      true,
+    );
+    const disclosed = await page.$eval("[data-agent-banner=kitchen] .reading-agent-tools", (node) => node.textContent ?? "");
+    assert.match(disclosed, /get_tonight/);
+    assert.match(disclosed, /search_food_items/);
+    assert.match(disclosed, /apply_tonight_changes/);
   } finally {
     await browser.close();
     await app.close();

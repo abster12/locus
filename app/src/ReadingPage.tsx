@@ -8,6 +8,7 @@ import {
   type ReadingWebmcpHost,
   type ReadingWebmcpPanelEntry,
 } from "./reading-webmcp.ts";
+import { PageAgentBanner } from "./page-agent-banner.tsx";
 
 type View = "queue" | "finished";
 type Sort = "recent" | "oldest" | "shortest" | "longest" | "publication";
@@ -328,17 +329,7 @@ function ReadingIndexView({ libraryIdentity }: { libraryIdentity: string }) {
           ) : null}
         </div>
         <p className="pagesub">Writing saved from your library. Locus never pretends a blocked page is an article.</p>
-        {webmcpReady ? (
-          <section className="reading-agent" aria-label="Browser agent available">
-            <span className="reading-agent-mark" aria-hidden="true">✦</span>
-            <div>
-              <p className="reading-agent-title">Your browser agent can help with your reading</p>
-              <p className="reading-agent-copy">
-                Ask it to search your saved articles, compare them, or recommend what to read next—it can bring the results back here. When asked, your agent may receive saved Reading metadata and stored article text.
-              </p>
-            </div>
-          </section>
-        ) : null}
+        {webmcpReady ? <PageAgentBanner surface="reading" /> : null}
         <div className="reading-controls">
           <label className="reading-search">
             <span className="visually-hidden">Search reading</span>

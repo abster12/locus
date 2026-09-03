@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type TripDocument, type TripSetupBody, type TripSummary } from "./api.ts";
 import { formatDate } from "./trips-format.ts";
+import { PageAgentBanner } from "./page-agent-banner.tsx";
 
-export function TripsIndex({ filter }: { filter: "active" | "archived" }) {
+export function TripsIndex({ filter, webmcpReady = false }: { filter: "active" | "archived"; webmcpReady?: boolean }) {
   const [trips, setTrips] = useState<TripSummary[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -35,6 +36,7 @@ export function TripsIndex({ filter }: { filter: "active" | "archived" }) {
           {trips ? <span className="count">{tripCountLine(trips.length)}</span> : null}
         </div>
         <p className="pagesub">Durable travel plans you can reopen and edit. Opening Trips does not start an agent.</p>
+        {webmcpReady ? <PageAgentBanner surface="trips" /> : null}
         <div className="trips-tools">
           <a className="btn primary" href="#/trips/new">
             Plan a trip
