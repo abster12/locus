@@ -91,11 +91,22 @@ function tabContext(listTabId, cancelled) {
 }
 
 async function postJson(origin, token, path, body) {
-  const res = await fetch(`${origin}${path}`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 20_000);
+  let res;
+  try {
+    res = await fetch(`${origin}${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") throw new Error(`${path} timed out`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `${path} failed`);
   return data;
@@ -185,6 +196,13 @@ async function jobCancelled(origin, token, id) {
   return data.status === "cancelled";
 }
 
+function armKeepAlive() {
+  const ping = () => chrome.runtime.getPlatformInfo().catch(() => {});
+  ping();
+  const id = setInterval(ping, 15_000);
+  return () => clearInterval(id);
+}
+
 async function runJob(origin, token, job) {
   say(`Opening ${job.source}…`);
   await postJson(origin, token, `/capture/v1/jobs/${job.id}/progress`, {
@@ -199,6 +217,7 @@ async function runJob(origin, token, job) {
       if (c) stop.v = true;
     });
   }, 1000);
+  const releaseKeepAlive = armKeepAlive();
   const ctx = tabContext(tab.id, () => stop.v);
   try {
     for (let i = 0; i < 1800; i++) {
@@ -212,11 +231,21 @@ async function runJob(origin, token, job) {
     // wildcard here would create a second live account from the site identity.
     const ingest = job.token;
     if (!ingest) throw new Error("job is missing its capture token");
-    const text = await runImport({ tabId: tab.id, tabUrl: job.url, origin, token: ingest, pack, ctx });
+    const text = await runImport({
+      tabId: tab.id,
+      tabUrl: job.url,
+      origin,
+      token: ingest,
+      pack,
+      ctx,
+      jobId: job.id,
+      jobToken: token,
+    });
     await postJson(origin, token, `/capture/v1/jobs/${job.id}/finish`, { message: text });
     say(text);
   } finally {
     clearInterval(poll);
+    releaseKeepAlive();
     // leave the tab — user may still be looking at it
   }
 }
@@ -254,14 +283,21 @@ async function runImport(msg) {
   const target = pack.detect({ url: tabUrl, title: "" });
   if (!target || target.kind !== "collection") throw new Error("This page is not a known saved-items or post page.");
 
-  say("Scrolling to load every saved post…");
+  const report = async (message, seen) => {
+    say(message);
+    if (!msg.jobId || !msg.jobToken) return;
+    await postJson(origin, msg.jobToken, `/capture/v1/jobs/${msg.jobId}/progress`, {
+      phase: "capturing",
+      message,
+      seen,
+    }).catch(() => {});
+  };
+
+  await report("Scrolling to load every saved post…", 0);
   const ctx = msg.ctx || tabContext(tabId, () => false);
   try {
     const account = (await pack.accountId(ctx).catch(() => null)) || "pending";
     const known = await getKnown(origin, token, pack.manifest.id);
-    const posts = [];
-    for await (const post of pack.readList(ctx, known)) posts.push(post);
-    if (posts.length === 0) return known.length ? "Nothing new to save." : "No records on this page.";
     const session = await postJson(origin, token, "/capture/v1/sessions", {
       protocolVersion: 1,
       source: pack.manifest.id,
@@ -275,17 +311,23 @@ async function runImport(msg) {
     let sequence = 1;
     let pending = [];
     let sent = 0;
-    for (const post of posts) {
+    for await (const post of pack.readList(ctx, known)) {
+      if (ctx.cancelled()) throw new Error("cancelled");
       pending.push(post);
       if (pending.length >= 8) {
         sequence = await flush(origin, token, session.sessionId, sequence, pending, sent);
         sent += pending.length;
         pending = [];
+        await report(`Saved ${sent} so far…`, sent);
       }
     }
-    await flush(origin, token, session.sessionId, sequence, pending, sent);
+    if (pending.length) {
+      sequence = await flush(origin, token, session.sessionId, sequence, pending, sent);
+      sent += pending.length;
+    }
+    if (sent === 0) return known.length ? "Nothing new to save." : "No records on this page.";
     await postJson(origin, token, "/capture/v1/finish", { sessionId: session.sessionId, coverage: "partial" });
-    return `Saved ${posts.length} record(s) to Locus.${known.length ? ` Skipped already saved.` : ""}`;
+    return `Saved ${sent} record(s) to Locus.${known.length ? ` Skipped already saved.` : ""}`;
   } finally {
     await ctx.dispose();
   }

@@ -90,11 +90,12 @@ type ItemRow = {
   status: string | null;
   snoozed_until: string | null;
   intake_actor: string | null;
+  source: string | null;
 };
 
 type Cursor = { publishedAt: string; firstObservedAt: string; id: string };
 
-type Org = {
+export type Org = {
   collections: { id: string; name: string; description: string | null }[];
   tags: { id: string | null; name: string }[];
 };
@@ -103,7 +104,9 @@ const ITEM_SELECT = `
   SELECT i.id, i.content_type, i.title, i.body, i.url, i.author_name, i.author_handle,
          i.published_at, i.source_saved_at, i.first_observed_at, i.captured_at, i.media,
          COALESCE(s.status, 'inbox') AS status, s.snoozed_until,
-         (SELECT n.actor FROM item_intake n WHERE n.item_id = i.id) AS intake_actor
+         (SELECT n.actor FROM item_intake n WHERE n.item_id = i.id) AS intake_actor,
+         (SELECT a.source FROM source_records r JOIN source_accounts a ON a.id = r.source_account_id
+           WHERE r.item_id = i.id LIMIT 1) AS source
     FROM items i
     LEFT JOIN item_state s ON s.item_id = i.id
 `;
@@ -172,7 +175,7 @@ export async function commitIntake(
     itemId = created.id;
     outcome = created.outcome;
   }
-  await applyMemberships(db, itemId, org, now);
+  await applyMemberships(db, itemId, org, now, "user");
   const item = await getLibraryItem(db, libraryId, itemId);
   if (!item) throw new RejectedPayload("intake item was not persisted");
   return { item, outcome };
@@ -465,11 +468,12 @@ function requiredId(value: unknown, field: string): string {
   return id;
 }
 
-async function insertItem(
+export async function insertItem(
   db: D1Database,
   libraryId: string,
   draft: ReturnType<typeof sanitizeItemDraft>,
   now: string,
+  intake: { actor: "user" | "agent"; observedJson: string } = { actor: "user", observedJson: "[]" },
 ): Promise<{ id: string; outcome: "created" | "reused" }> {
   const itemId = crypto.randomUUID();
   const activityId = crypto.randomUUID();
@@ -511,9 +515,9 @@ async function insertItem(
         .bind(activityId, itemId, now),
       db
         .prepare(
-          `INSERT INTO item_intake (item_id, library_id, actor, created_at, observed_json) VALUES (?, ?, 'user', ?, '[]')`,
+          `INSERT INTO item_intake (item_id, library_id, actor, created_at, observed_json) VALUES (?, ?, ?, ?, ?)`,
         )
-        .bind(itemId, libraryId, now),
+        .bind(itemId, libraryId, intake.actor, now, intake.observedJson),
     ]);
     return { id: itemId, outcome: "created" };
   } catch {
@@ -523,7 +527,7 @@ async function insertItem(
   }
 }
 
-async function findExistingItemId(db: D1Database, libraryId: string, url: string): Promise<string | null> {
+export async function findExistingItemId(db: D1Database, libraryId: string, url: string): Promise<string | null> {
   const row = await first<{ id: string }>(db, `SELECT id FROM items WHERE library_id = ? AND url = ?`, libraryId, url);
   return row?.id ?? null;
 }
@@ -567,7 +571,7 @@ async function hydrate(db: D1Database, row: ItemRow): Promise<ItemCard> {
     firstObservedAt: row.first_observed_at,
     capturedAt: row.captured_at,
     media: parseMedia(row.media),
-    source: null,
+    source: row.source,
     status: row.status ?? "inbox",
     snoozedUntil: row.snoozed_until,
     tags,
@@ -575,8 +579,39 @@ async function hydrate(db: D1Database, row: ItemRow): Promise<ItemCard> {
     notes,
     dateLabel: dateLabel(item),
     intakeActor: row.intake_actor === "user" || row.intake_actor === "agent" ? row.intake_actor : null,
-    classifications: [],
+    classifications: await loadClassifications(db, row.id),
   };
+}
+
+async function loadClassifications(
+  db: D1Database,
+  itemId: string,
+): Promise<ItemCard["classifications"]> {
+  const rows = await all<{ tag_id: string; rationale: string; evidence_json: string }>(
+    db,
+    `SELECT tag_id, rationale, evidence_json FROM intake_tag_evidence WHERE item_id = ? ORDER BY tag_id`,
+    itemId,
+  );
+  return rows.map((row) => ({
+    tagId: row.tag_id,
+    rationale: row.rationale,
+    evidence: parseEvidenceJson(row.evidence_json),
+  }));
+}
+
+function parseEvidenceJson(raw: string): ItemCard["classifications"][number]["evidence"] {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const rec = entry as { field?: unknown; text?: unknown };
+      if (typeof rec.field !== "string" || typeof rec.text !== "string") return [];
+      return [{ field: rec.field, text: rec.text }];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function matchingWhere(libraryId: string, filter: ItemListFilter, includeShelf = true): { where: string[]; params: unknown[] } {
@@ -590,7 +625,11 @@ function matchingWhere(libraryId: string, filter: ItemListFilter, includeShelf =
   if (filter.source === "you") {
     where.push(`EXISTS (SELECT 1 FROM item_intake n WHERE n.item_id = i.id AND n.actor = 'user')`);
   } else if (filter.source) {
-    where.push("1 = 0");
+    where.push(`EXISTS (
+      SELECT 1 FROM source_records r JOIN source_accounts a ON a.id = r.source_account_id
+      WHERE r.item_id = i.id AND a.source = ?
+    )`);
+    params.push(filter.source);
   }
   if (filter.collectionId) {
     where.push(
@@ -682,7 +721,7 @@ function parseSource(input: unknown, now: string): {
   };
 }
 
-async function resolveOrg(
+export async function resolveOrg(
   db: D1Database,
   libraryId: string,
   rec: Record<string, unknown>,
@@ -732,7 +771,7 @@ async function resolveOrg(
   return { collections, tags };
 }
 
-async function peekTag(db: D1Database, libraryId: string, name: string): Promise<{ id: string | null; name: string }> {
+export async function peekTag(db: D1Database, libraryId: string, name: string): Promise<{ id: string | null; name: string }> {
   const clean = sanitizeText(name, 40);
   if (!clean) throw new RejectedPayload("tag name required");
   const existing = await first<{ id: string; name: string }>(
@@ -744,7 +783,7 @@ async function peekTag(db: D1Database, libraryId: string, name: string): Promise
   return existing ?? { id: null, name: clean };
 }
 
-async function ensureTag(
+export async function ensureTag(
   db: D1Database,
   libraryId: string,
   name: string,
@@ -766,24 +805,53 @@ async function ensureTag(
   }
 }
 
-async function applyMemberships(db: D1Database, itemId: string, org: Org, now: string): Promise<void> {
+export async function applyMemberships(
+  db: D1Database,
+  itemId: string,
+  org: Org,
+  now: string,
+  actor: "user" | "agent" = "user",
+): Promise<{ added: { tagIds: string[]; collectionIds: string[] }; alreadyPresent: { tagIds: string[]; collectionIds: string[] } }> {
+  const added = { tagIds: [] as string[], collectionIds: [] as string[] };
+  const alreadyPresent = { tagIds: [] as string[], collectionIds: [] as string[] };
   for (const collection of org.collections) {
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'collection', 'user', ?)`,
-      )
-      .bind(itemId, collection.id, now)
-      .run();
+    const existing = await first<{ ok: number }>(
+      db,
+      `SELECT 1 AS ok FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'collection'`,
+      itemId,
+      collection.id,
+    );
+    if (existing) alreadyPresent.collectionIds.push(collection.id);
+    else {
+      await db
+        .prepare(
+          `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'collection', ?, ?)`,
+        )
+        .bind(itemId, collection.id, actor, now)
+        .run();
+      added.collectionIds.push(collection.id);
+    }
   }
   for (const tag of org.tags) {
     if (!tag.id) throw new RejectedPayload("unknown tag");
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'tag', 'user', ?)`,
-      )
-      .bind(itemId, tag.id, now)
-      .run();
+    const existing = await first<{ ok: number }>(
+      db,
+      `SELECT 1 AS ok FROM memberships WHERE item_id = ? AND target_id = ? AND target_kind = 'tag'`,
+      itemId,
+      tag.id,
+    );
+    if (existing) alreadyPresent.tagIds.push(tag.id);
+    else {
+      await db
+        .prepare(
+          `INSERT OR IGNORE INTO memberships (item_id, target_id, target_kind, actor, created_at) VALUES (?, ?, 'tag', ?, ?)`,
+        )
+        .bind(itemId, tag.id, actor, now)
+        .run();
+      added.tagIds.push(tag.id);
+    }
   }
+  return { added, alreadyPresent };
 }
 
 function parseMedia(raw: string): { kind: string; url: string }[] {

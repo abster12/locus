@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type ExtensionHealth, type ImportResult, type ImportSummary, type LibraryCapability, type LibraryCapabilityScope, type SourceConnection, type SourceConnectionState } from "./api.ts";
 import { SourceMark } from "./SourceMark.tsx";
 import { notifyLibraryChanged } from "./library-events.ts";
+import { RUNTIME } from "./runtime.ts";
 
 const CONNECTION_UI: Record<SourceConnectionState, { status: string; primary: string; secondary: string | null }> = {
   not_connected: { status: "Not connected", primary: "Connect", secondary: null },
@@ -161,15 +162,19 @@ export function SourcesPage() {
       {msg && <div className="banner">{msg}</div>}
       {pageError ? <p className="action-error" role="alert">{pageError}</p> : null}
 
-      <div className="pagehead">
-        <h1>Account</h1>
-      </div>
+      {RUNTIME !== "hosted" ? (
+        <div className="pagehead">
+          <h1>Account</h1>
+        </div>
+      ) : null}
 
-      <div className="block" id="local-account">
-        <h2>Account</h2>
-        <h3>Local account</h3>
-        <p className="quiet">Your Library is stored on this device.</p>
-      </div>
+      {RUNTIME !== "hosted" ? (
+        <div className="block" id="local-account">
+          <h2>Account</h2>
+          <h3>Local account</h3>
+          <p className="quiet">Your Library is stored on this device.</p>
+        </div>
+      ) : null}
 
       <div className="block" id="library-intake-access">
         <h2>Library Intake</h2>
@@ -316,6 +321,7 @@ export function SourcesPage() {
           );
         })}
       </div>
+      {RUNTIME !== "hosted" ? (
       <div className="block" id="preferences">
         <h2>Preferences</h2>
         <label className="stack">
@@ -340,9 +346,10 @@ export function SourcesPage() {
           </p>
         )}
       </div>
+      ) : null}
 
       <div className="block" id="data-and-privacy">
-        <h2>Data and privacy</h2>
+        <h2>{RUNTIME === "hosted" ? "Import" : "Data and privacy"}</h2>
         {data.imports.length > 0 ? (
           <div id="import-history">
             <h3>Import history</h3>
@@ -353,6 +360,7 @@ export function SourcesPage() {
             </ul>
           </div>
         ) : null}
+        {RUNTIME !== "hosted" ? (
         <div className="filters">
           <button
             className="btn"
@@ -406,10 +414,12 @@ export function SourcesPage() {
             {deskAction === "restore" ? "Restoring…" : "Restore from archive"}
           </button>
         </div>
+        ) : null}
         <details id="import-source-exports" className="account-import">
           <summary>Import source exports</summary>
           <ImportPanel />
         </details>
+        {RUNTIME !== "hosted" ? (
         <div className="account-danger">
           <button
             className="btn danger"
@@ -424,6 +434,7 @@ export function SourcesPage() {
             {deskAction === "delete" ? "Deleting…" : "Delete library"}
           </button>
         </div>
+        ) : null}
       </div>
     </section>
   );
@@ -547,6 +558,8 @@ function ImportPanel() {
           Import file
         </button>
       </div>
+      {RUNTIME !== "hosted" ? (
+      <>
       <textarea value={posts} onChange={(e) => { setPosts(e.target.value); setErr(null); }} placeholder="Reddit saved_posts.csv" aria-label="Reddit saved posts CSV" />
       <textarea value={comments} onChange={(e) => { setComments(e.target.value); setErr(null); }} placeholder="Reddit saved_comments.csv" aria-label="Reddit saved comments CSV" />
       <div className="filters">
@@ -557,6 +570,8 @@ function ImportPanel() {
           Import Reddit export
         </button>
       </div>
+      </>
+      ) : null}
       {busy ? <p className="quiet" role="status">Importing…</p> : null}
       {err ? <p className="action-error" role="alert">{err}</p> : null}
       {out ? <p className="quiet" role="status">{out}</p> : null}

@@ -4,3 +4,10 @@ dist/
 .DS_Store
 .vite/
 extension/shell/pack.js
+.agents/
+tmp/
+handoff/
+.scratch/**/**/**/
+/spikes/
+/docs
+.scratch/trips/shots/

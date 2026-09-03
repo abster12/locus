@@ -20,7 +20,7 @@ const hostedSession = {
   library: { id: "lib-1", name: "Ada's Library", role: "owner" },
 };
 
-const LOCAL_API = /^\/api\/(sources|export|imports|settings|library|pair|extension)/;
+const LOCAL_API = /^\/api\/(export|imports|settings|library|pair|extension)/;
 
 const stub = {
   mode: "signed-out" as "signed-out" | "signed-in" | "denied" | "fail" | "expire",
@@ -97,6 +97,27 @@ function handle(req: IncomingMessage, res: ServerResponse) {
     sendJson(res, 200, { collections: [], tags: [] });
     return;
   }
+  if (url.pathname === "/api/sources") {
+    sendJson(res, 200, {
+      account: { mode: "hosted" },
+      extension: { state: "not_paired", lastSeenAt: null },
+      connections: [
+        { source: "x", label: "X", state: "not_connected", liveAccount: null, progress: null, latestAttempt: null, lastSuccessfulCapture: null },
+        { source: "instagram", label: "Instagram", state: "not_connected", liveAccount: null, progress: null, latestAttempt: null, lastSuccessfulCapture: null },
+        { source: "youtube", label: "YouTube", state: "not_connected", liveAccount: null, progress: null, latestAttempt: null, lastSuccessfulCapture: null },
+        { source: "reddit", label: "Reddit", state: "not_connected", liveAccount: null, progress: null, latestAttempt: null, lastSuccessfulCapture: null },
+      ],
+      imports: [],
+      preferences: { captureOnOpen: false },
+      pi: { available: false, detail: "" },
+    });
+    return;
+  }
+  // Hosted route since step 6: the unified Account page reads Library MCP grants.
+  if (url.pathname === "/api/library-capabilities") {
+    sendJson(res, 200, { capabilities: [], origin: BASE, url: `${BASE}/mcp` });
+    return;
+  }
   if (LOCAL_API.test(url.pathname)) {
     stub.localApis.push(url.pathname);
     sendJson(res, 404, { error: "Not found" });
@@ -168,7 +189,7 @@ test("signed-out hosted shell is Google only", async () => {
   }
 });
 
-test("signed-in hosted App shows Desk and Google Account, not later tabs", async () => {
+test("signed-in hosted App shows the live tabs and Google Account", async () => {
   resetStub("signed-in");
   const page = await openPage();
   try {
@@ -177,15 +198,17 @@ test("signed-in hosted App shows Desk and Google Account, not later tabs", async
     const desk = await page.evaluate(() => document.body.textContent ?? "");
     assert.match(desk, /Desk/);
     assert.doesNotMatch(desk, /Continue with Google/);
-    assert.doesNotMatch(desk, /Kitchen/);
-    assert.doesNotMatch(desk, /Atlas/);
-    assert.doesNotMatch(desk, /Trips/);
-    assert.doesNotMatch(desk, /Reading/);
+    // Steps 4–6 turned the domain tabs on (ADR 0004): every route exists, so
+    // none stay hidden.
+    for (const tab of ["Kitchen", "Atlas", "Trips", "Reading", "Account"]) {
+      assert.match(desk, new RegExp(tab));
+    }
     assert.doesNotMatch(desk, /Capture setup/);
     assert.doesNotMatch(desk, /Pair extension/);
     assert.doesNotMatch(desk, /Connect/);
     await page.goto(`${BASE}/#/account`, { waitUntil: "load" });
     await page.waitForSelector("#hosted-account", { timeout: 5000 });
+    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Capture setup"), { timeout: 5000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
     assert.match(text, /Ada Lovelace/);
     assert.match(text, /ada@example.com/);
@@ -193,9 +216,10 @@ test("signed-in hosted App shows Desk and Google Account, not later tabs", async
     assert.match(text, /Ada's Library/);
     assert.match(text, /Owner/);
     assert.match(text, /Sign out/);
-    assert.doesNotMatch(text, /Capture setup/);
-    assert.doesNotMatch(text, /Pair extension/);
+    assert.match(text, /Capture setup/);
+    assert.match(text, /Pair extension/);
     assert.doesNotMatch(text, /Local account/);
+    assert.match(text, /Library Intake/);
     assert.equal(stub.localApis.length, 0);
   } finally {
     await page.close();

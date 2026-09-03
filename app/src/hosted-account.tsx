@@ -1,5 +1,6 @@
 import { useContext } from "react";
 import { HostedAuthContext } from "./hosted-auth.ts";
+import { SourcesPage } from "./SourcesPage.tsx";
 
 export function HostedAccountPage() {
   const hosted = useContext(HostedAuthContext);
@@ -30,6 +31,7 @@ export function HostedAccountPage() {
           Sign out
         </button>
       </div>
+      <SourcesPage />
     </section>
   );
 }

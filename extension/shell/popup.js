@@ -29,12 +29,20 @@ async function hello() {
     originEl.value = data.origin || origin;
     tokenEl.value = data.token;
     manual.classList.add("hidden");
-    status.textContent = "Paired with the desk.";
+    status.textContent = `Paired with ${data.origin || origin}.`;
   } catch (e) {
     manual.classList.remove("hidden");
     status.textContent = e instanceof Error ? e.message : String(e);
   }
 }
+
+document.getElementById("changePair").onclick = async () => {
+  await chrome.storage.local.remove(["origin", "token"]);
+  originEl.value = "";
+  tokenEl.value = "";
+  manual.classList.remove("hidden");
+  status.textContent = "Unpaired. Paste the staging origin and loc_ token from Account.";
+};
 
 function pairing() {
   return {

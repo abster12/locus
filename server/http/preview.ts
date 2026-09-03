@@ -2,18 +2,16 @@ import { lookup } from "node:dns/promises";
 import type { Db } from "../../db/open.ts";
 import { nowIso } from "../../db/open.ts";
 import { absorbPreviewedUrl } from "../reading/module.ts";
+import {
+  framePermission as framePermissionOf,
+  PREVIEW_MAX_BYTES,
+  parsePreview,
+  type LinkPreview,
+} from "../../core/link-preview.ts";
 
-export interface LinkPreview {
-  url: string;
-  status: "ok" | "error";
-  title: string | null;
-  description: string | null;
-  image: string | null;
-  siteName: string | null;
-  fetchedAt: string;
-}
+export { allowsIframe, framePermission, parsePreview } from "../../core/link-preview.ts";
+export type { LinkPreview } from "../../core/link-preview.ts";
 
-const MAX_BYTES = 256 * 1024;
 const ERROR_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface PreviewRow {
@@ -79,8 +77,9 @@ function rowToPreview(r: PreviewRow): LinkPreview {
 }
 
 // --- fetching ------------------------------------------------------------
-// Captured content is untrusted: only http(s), only public hosts, bounded
-// redirects, bounded bytes, hard timeout.
+// Captured content is untrusted: only http(s), only public hosts (resolved via
+// node DNS and checked against private ranges), bounded redirects, bounded
+// bytes, hard timeout.
 
 async function fetchHtml(raw: string): Promise<{ html: string; finalUrl: string }> {
   let current = raw;
@@ -108,7 +107,7 @@ async function fetchHtml(raw: string): Promise<{ html: string; finalUrl: string 
     if (!reader) throw new Error("no body");
     const chunks: Uint8Array[] = [];
     let size = 0;
-    while (size < MAX_BYTES) {
+    while (size < PREVIEW_MAX_BYTES) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
@@ -142,26 +141,6 @@ async function assertFetchable(raw: string): Promise<URL> {
   return u;
 }
 
-export function allowsIframe(xfo: string | null, csp: string | null): boolean | null {
-  const fa = csp?.match(/frame-ancestors\s+([^;,]+)/i)?.[1];
-  if (fa) {
-    const srcs = fa.trim().split(/\s+/).filter(Boolean);
-    if (srcs.includes("*")) return true;
-    if (srcs.some((s) => /127\.0\.0\.1|localhost/i.test(s))) return true;
-    return false;
-  }
-  if (xfo) {
-    const v = xfo.trim().toLowerCase();
-    if (v === "deny" || v === "sameorigin" || v.startsWith("allow-from")) return false;
-  }
-  return null;
-}
-
-export function framePermission(status: number, xfo: string | null, csp: string | null): "yes" | "no" {
-  if (status < 200 || status >= 300) return "no";
-  return allowsIframe(xfo, csp) === false ? "no" : "yes";
-}
-
 export async function frameCheck(rawUrl: string): Promise<"yes" | "no" | "unknown"> {
   try {
     let current = rawUrl;
@@ -183,7 +162,7 @@ export async function frameCheck(rawUrl: string): Promise<"yes" | "no" | "unknow
         continue;
       }
       void res.body?.cancel();
-      return framePermission(res.status, res.headers.get("x-frame-options"), res.headers.get("content-security-policy"));
+      return framePermissionOf(res.status, res.headers.get("x-frame-options"), res.headers.get("content-security-policy"));
     }
     return "unknown";
   } catch {
@@ -210,54 +189,4 @@ export function isPrivateIp(ip: string): boolean {
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168)
   );
-}
-
-// --- parsing ---------------------------------------------------------------
-
-export function parsePreview(
-  html: string,
-  baseUrl: string,
-): Pick<LinkPreview, "title" | "description" | "image" | "siteName"> {
-  const headEnd = html.search(/<\/head\s*>/i);
-  const head = headEnd > 0 ? html.slice(0, headEnd) : html.slice(0, MAX_BYTES);
-  const tags = head.match(/<meta\s[^>]*>/gi) ?? [];
-  const meta = (names: string[]): string | null => {
-    for (const tag of tags) {
-      const key = (attr(tag, "property") ?? attr(tag, "name"))?.toLowerCase();
-      if (key && names.includes(key)) {
-        const content = attr(tag, "content");
-        if (content?.trim()) return decodeEntities(content.trim());
-      }
-    }
-    return null;
-  };
-  const titleMatch = head.match(/<title[^>]*>([^<]*)<\/title>/i);
-  const plainTitle = titleMatch?.[1]?.trim();
-  const title = meta(["og:title", "twitter:title"]) ?? (plainTitle ? decodeEntities(plainTitle) : null);
-  const description = meta(["og:description", "twitter:description", "description"]);
-  const siteName = meta(["og:site_name", "application-name"]);
-  const rawImage = meta(["og:image", "og:image:url", "twitter:image", "twitter:image:src"]);
-  let image: string | null = null;
-  if (rawImage) {
-    try {
-      const abs = new URL(rawImage, baseUrl);
-      if (abs.protocol === "http:" || abs.protocol === "https:") image = abs.toString();
-    } catch {
-      image = null;
-    }
-  }
-  return { title, description, image, siteName };
-}
-
-function attr(tag: string, name: string): string | null {
-  const m =
-    tag.match(new RegExp(`${name}\\s*=\\s*"([^"]*)"`, "i")) ?? tag.match(new RegExp(`${name}\\s*=\\s*'([^']*)'`, "i"));
-  return m?.[1] ?? null;
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&#x([0-9a-f]+);/gi, (_m, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
-    .replace(/&(amp|lt|gt|quot|apos);/g, (m, n: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" })[n] ?? m);
 }

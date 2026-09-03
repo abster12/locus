@@ -173,6 +173,12 @@ function xEmpty(): boolean {
   return /you haven.t added any posts to your bookmarks|save posts for later|you haven.t (bookmarked|saved) any/i.test(text);
 }
 
+function xLoading(): boolean {
+  const root =
+    document.querySelector('[aria-label^="Timeline:"], [data-testid="primaryColumn"]') ?? document;
+  return Boolean(root.querySelector('[role="progressbar"]'));
+}
+
 export const xPack: SitePack = {
   manifest: {
     id: "x",
@@ -210,7 +216,7 @@ export const xPack: SitePack = {
     return ctx.evaluate(xAccount);
   },
   async *readList(ctx: CaptureContext, knownIds: string[] = []) {
-    yield* scanList(ctx, extractXCards, { empty: xEmpty, known: new Set(knownIds) });
+    yield* scanList(ctx, extractXCards, { empty: xEmpty, known: new Set(knownIds), loading: xLoading });
   },
   async readPage(ctx: CaptureContext): Promise<Post | null> {
     const url = await ctx.url();

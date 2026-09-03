@@ -1,6 +1,5 @@
 import { instagramEmbedUrl, youtubeEmbedUrl, youtubeVideoId } from "../../core/sanitize.ts";
 import { RejectedPayload } from "../../core/sanitize.ts";
-import type { ItemCard } from "../../core/library.ts";
 
 export type KitchenAvailability = "reviewed" | "draft" | "caption" | "watch" | "source_only";
 export type RecipeActor = "user" | "agent";
@@ -126,7 +125,10 @@ export function captionDuplicatesTitle(title: string | null | undefined, caption
   return trimmedCaption === trimmedTitle || trimmedCaption.startsWith(trimmedTitle);
 }
 
-export function displayTitle(item: ItemCard, caption: string | null): string {
+export function displayTitle(
+  item: { title: string | null; authorHandle: string | null; authorName: string | null; url: string; contentType: string },
+  caption: string | null,
+): string {
   const title = item.title?.trim() ?? "";
   if (title && !captionDuplicatesTitle(title, caption)) return boundLine(title, 80);
   const line = firstMeaningfulLine(caption);
@@ -194,7 +196,7 @@ export function validateRecipeDraft(raw: unknown, caption: string, actor: Recipe
     draft.totalTimeEvidence = totalTimeEvidence;
   }
   const encoded = JSON.stringify(draft);
-  if (Buffer.byteLength(encoded, "utf8") > MAX_RECIPE_JSON_BYTES) throw new RejectedPayload("recipe exceeds 256 KiB");
+  if (new TextEncoder().encode(encoded).byteLength > MAX_RECIPE_JSON_BYTES) throw new RejectedPayload("recipe exceeds 256 KiB");
   if (actor === "agent") {
     const kinds = recipeEvidenceKinds(draft);
     if (kinds.has("caption") && kinds.has("generated")) {
@@ -412,7 +414,7 @@ function boundLine(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
-function sourceKindLabel(item: ItemCard): string | null {
+function sourceKindLabel(item: { url: string; contentType: string }): string | null {
   if (/instagram\.com\/reel\//i.test(item.url) || item.contentType === "reel") return "Reel";
   if (/instagram\.com\/tv\//i.test(item.url)) return "video";
   if (/instagram\.com\/p\//i.test(item.url)) return "Post";

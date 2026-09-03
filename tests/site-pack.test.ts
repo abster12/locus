@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { CaptureContext } from "../site-packs/shared.ts";
+import { scrollList, type CaptureContext } from "../site-packs/shared.ts";
 import { xPack } from "../site-packs/x/index.ts";
 import { youtubePack } from "../site-packs/youtube/index.ts";
 import { redditPack } from "../site-packs/reddit/index.ts";
@@ -135,4 +135,59 @@ test("readList skips ids the desk already has", async () => {
     got.map((p) => p.id),
     ["2"],
   );
+});
+
+test("readList keeps going when the next page of bookmarks appears after a pause", async () => {
+  const first = Array.from({ length: 12 }, (_, i) => ({
+    id: String(i + 1),
+    handle: "a",
+    name: "A",
+    text: `one ${i + 1}`,
+  }));
+  const rest = Array.from({ length: 12 }, (_, i) => ({
+    id: String(i + 13),
+    handle: "b",
+    name: "B",
+    text: `two ${i + 13}`,
+  }));
+  xPage("https://x.com/i/bookmarks", first);
+  let scrolls = 0;
+  const ctx: CaptureContext = {
+    ...fakeCtx(),
+    evaluate: async (fn) => {
+      if (fn === scrollList) {
+        scrolls += 1;
+        if (scrolls === 10) xPage("https://x.com/i/bookmarks", [...first, ...rest]);
+      }
+      return fn();
+    },
+  };
+  const got = [];
+  for await (const post of xPack.readList(ctx)) got.push(post);
+  assert.deepEqual(
+    got.map((p) => p.id),
+    [...first, ...rest].map((t) => t.id),
+  );
+});
+
+test("readList still stops once the bookmark list stops growing", async () => {
+  xPage("https://x.com/i/bookmarks", [
+    { id: "1", handle: "a", name: "A", text: "one" },
+    { id: "2", handle: "b", name: "B", text: "two" },
+  ]);
+  let scrolls = 0;
+  const ctx: CaptureContext = {
+    ...fakeCtx(),
+    evaluate: async (fn) => {
+      if (fn === scrollList) scrolls += 1;
+      return fn();
+    },
+  };
+  const got = [];
+  for await (const post of xPack.readList(ctx)) got.push(post);
+  assert.deepEqual(
+    got.map((p) => p.id),
+    ["1", "2"],
+  );
+  assert.ok(scrolls > 0 && scrolls < 40);
 });

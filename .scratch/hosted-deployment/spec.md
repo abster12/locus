@@ -28,10 +28,13 @@ Do not build Cloudflare Browser Run or Containers for this path. Local Locus may
 
 - Identity tickets 01–06 resolved. Staging proved two Google users, distinct Libraries, cross-user `404`, disable, no stored Google tokens. ADR 0003.
 - D1 `0004_library_items.sql` applied local + staging (items, item_state, activities, item_intake, tags, collections, memberships, notes). Unique `(library_id, url)` and `(library_id, tag name)`.
-- Desk + Save a link is on the staging Worker. Two-user isolation is covered by Worker tests; operator smoke with two Google accounts is the remaining live check.
-- Desk mutations (status, tags, notes, collections, memberships) are implemented on the Worker and in hosted Desk/Stage UI. Worker tests cover two-user isolation; deploy to staging next.
-- Reading (documents, progress, extract-via-fetch, D1 text) is implemented on the Worker. The Reading tab is on. Images stay at the original URL. Deploy Reading after Desk mutations smoke.
-- Local Account/Sources and Library Intake exist on localhost. They are not on the Worker yet.
+- Desk + Save a link is on the staging Worker. Two-user isolation is covered by Worker tests.
+- Desk mutations (status, tags, notes, collections, memberships) are on the staging Worker and in hosted Desk/Stage UI. Worker tests cover two-user isolation.
+- Reading (documents, progress, extract-via-fetch, D1 text) is on the staging Worker. D1 `0005_reading.sql` applied local + staging. The Reading tab is on. Images stay at the original URL.
+- Atlas, Kitchen, and Trips are on the staging Worker. D1 `0006_kitchen.sql`, `0007_atlas.sql`, and `0008_trips.sql` applied local + staging. Those tabs are on. Hosted Kitchen generate and Atlas analyzer stay disabled until an approved Worker secret exists. Owner trip share routes are on the Worker; public share HTML is still later.
+- Step 5 is in the Worker: Source connection state, extension pairing to the hosted origin, Capture ingest + jobs in D1, JSONL import. No server Chrome. D1 `0009_capture.sql` applied local + staging.
+- Step 6 is in the Worker: intake context/search, classified drafts prepare/save, agent batches with mutation ids, Library capabilities, `POST /mcp`. D1 `0010_intake_extras.sql` applied local + staging. WebMCP intake tools and Account capability grants are on in the hosted App.
+- Step 7 is in the Worker and deployed: link preview (`0011_link_previews.sql`, Library-scoped cache), frame-check, deterministic summaries with the Summary tab on (prose stays unavailable until an approved Worker secret), and the public Trip share page at `GET /s/:token`. The share renderer and pure preview parsing moved to `core/` so local and hosted stay one implementation. Arbitrary URL fetches go through the reading-fetch SSRF policy — ADR 0005.
 - Effect remains excluded (ADR 0002).
 
 ## Stack
@@ -99,15 +102,15 @@ Each step deploys to staging. The App is the real App. Tabs whose APIs are missi
 
 Done when two signed-in users can each save a URL and only see their own Item.
 
-### 2. Desk mutations
+### 2. Desk mutations — on staging
 
 Status, tags, notes, `POST /api/collections`, memberships. Inbox becomes usable.
 
-### 3. Reading
+### 3. Reading — on staging
 
 Documents, progress, extract-via-fetch, D1 text. Turn the Reading tab on.
 
-### 4. Atlas, Kitchen, Trips
+### 4. Atlas, Kitchen, Trips — on staging
 
 Their tables and routes. Turn those tabs on. Hosted AI only with an approved Worker secret.
 
@@ -119,9 +122,9 @@ Google identity (done). Source connection **state**. Pair extension to the hoste
 
 Drafts, batch, context, library MCP, capabilities.
 
-### 7. The rest of the App
+### 7. The rest of the App — on staging
 
-Summaries, link preview, frame-check, trip share. SSRF policy for Worker `fetch` before arbitrary URL fetch.
+Summaries, link preview, frame-check, trip share. SSRF policy for Worker `fetch` before arbitrary URL fetch (ADR 0005). Deployed 2026-09-03; operator two-user smoke of the new routes is the remaining live check.
 
 After 4, hosted chrome matches local. After 5–7, the same verbs, except server-launched Chrome.
 
@@ -147,4 +150,4 @@ Production env, custom domain, and Chrome Web Store listing are **later ops**, n
 
 ## Next milestone
 
-Deploy step 2 (Desk mutations) to staging, then two-user smoke. Then apply `0005_reading.sql` and deploy step 3 (Reading): two-user smoke that a document, progress, and remove stay inside one Library.
+The sequence is deployed through step 7. What remains, in order: (1) operator two-user smoke of summaries, link preview, frame-check, and trip share on staging per the test matrix; (2) hosted capture reliability — issue 01 (capture does not finish all bookmarks); (3) decide the approved Worker secret for hosted AI (Kitchen generate, Atlas analyzer, summary prose) and turn those actions on; (4) later ops only — Chrome Web Store listing, production env, custom domain.

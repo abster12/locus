@@ -854,8 +854,13 @@ function matchingWhere(
     params.push(query.kind);
   }
   if (query.source) {
-    // Hosted Sources land in step 5. A source filter matches nothing until then.
-    where.push(`1 = 0`);
+    where.push(`EXISTS (
+      SELECT 1 FROM reading_provenance rp
+        JOIN source_records sr ON sr.item_id = rp.item_id
+        JOIN source_accounts sa ON sa.id = sr.source_account_id
+       WHERE rp.library_id = d.library_id AND rp.document_id = d.id AND sa.source = ?
+    )`);
+    params.push(query.source);
   }
   if (query.q?.trim()) {
     const like = `%${query.q.trim()}%`;

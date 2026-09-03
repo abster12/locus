@@ -70,38 +70,53 @@ export interface SitePack {
 }
 
 /**
- * Runs inside the tab. Finds the list's own scroll box (X/IG often
- * are not `window`) and jumps to the bottom so more cards load.
+ * Runs inside the tab. Pages through the list's own scroll box (X/IG often
+ * are not `window`). Jump-to-end is a no-op once we are already at the bottom
+ * of the *loaded* virtual list, so we walk last-card + one viewport, and pull
+ * up when that does not move so the next tick can retrigger load-more.
+ *
+ * Must stay self-contained — chrome.scripting serializes this function.
  */
 export function scrollList(): void {
-  const first = document.querySelector(
-    'article[data-testid="tweet"], ytd-playlist-video-renderer, shreddit-post, shreddit-profile-comment, a[href*="/p/"], a[href*="/reel/"]',
-  );
-  let n = first as HTMLElement | null;
+  const selector =
+    'article[data-testid="tweet"], ytd-playlist-video-renderer, shreddit-post, shreddit-profile-comment, a[href*="/p/"], a[href*="/reel/"]';
+  const cards = document.querySelectorAll(selector);
+  const last = cards[cards.length - 1] as HTMLElement | undefined;
+  last?.scrollIntoView?.({ block: "end", inline: "nearest" });
+
+  const boxes: HTMLElement[] = [];
+  let n: HTMLElement | null = last ?? (document.querySelector(selector) as HTMLElement | null);
   while (n && n !== document.body && n !== document.documentElement) {
     const s = getComputedStyle(n);
-    if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 40) {
-      n.scrollTop = n.scrollHeight;
-      return;
-    }
+    if (/(auto|scroll|overlay)/.test(s.overflowY) && n.scrollHeight > n.clientHeight + 40) boxes.push(n);
     n = n.parentElement;
   }
-  const box = document.scrollingElement || document.documentElement;
-  box.scrollTo(0, document.body?.scrollHeight ?? box.scrollHeight);
+  const page = (document.scrollingElement || document.documentElement) as HTMLElement | null;
+  if (page) boxes.push(page);
+
+  for (const box of boxes) {
+    const before = box.scrollTop;
+    const step = Math.max(480, Math.floor((box.clientHeight || 800) * 0.85));
+    if (typeof box.scrollBy === "function") box.scrollBy(0, step);
+    else box.scrollTo?.(0, before + step);
+    if ((box.scrollTop || 0) <= before + 2) {
+      box.scrollTop = Math.max(0, before - Math.max(240, Math.floor((box.clientHeight || 800) * 0.5)));
+    }
+  }
 }
 
 /** Scroll until the list stops growing. Yields only posts not in `known`. */
 export async function* scanList(
   ctx: CaptureContext,
   extract: () => Post[],
-  args: { empty: () => boolean; known?: Set<string> },
+  args: { empty: () => boolean; known?: Set<string>; loading?: () => boolean },
 ): AsyncGenerator<Post> {
   const seen = new Set<string>();
   const skip = args.known ?? new Set<string>();
   let stagnant = 0;
   let ticks = 0;
-  // ponytail: 400-tick ceiling so a broken scroller cannot loop forever
-  while (!ctx.cancelled() && stagnant < 8 && ticks < 400) {
+  // ponytail: tick ceiling so a broken scroller cannot loop forever
+  while (!ctx.cancelled() && stagnant < 16 && ticks < 1000) {
     ticks += 1;
     const batch = await ctx.evaluate(extract);
     let added = 0;
@@ -111,10 +126,11 @@ export async function* scanList(
       added += 1;
       if (!skip.has(post.id)) yield post;
     }
-    if (added === 0) stagnant += 1;
+    const loading = args.loading ? await ctx.evaluate(args.loading) : false;
+    if (added === 0 && !loading) stagnant += 1;
     else stagnant = 0;
     if ((await ctx.evaluate(args.empty)) && seen.size === 0) break;
     await ctx.evaluate(scrollList);
-    await ctx.wait(700);
+    await ctx.wait(added === 0 ? 1200 : 700);
   }
 }

@@ -8,7 +8,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { unstable_dev, type Unstable_DevWorker } from "wrangler";
 import { resolveIdentity } from "../src/identity.ts";
-import { applySecurityHeaders, logEvent, mayLogRequest, redact } from "../src/index.ts";
+import { applySecurityHeaders, logEvent, mayLogRequest, redact, requestLogPath } from "../src/index.ts";
 
 const HOSTED_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const SECRET = "test-secret-test-secret-test-secret";
@@ -609,6 +609,12 @@ test("the structured logger redacts before emitting one JSON record", () => {
   assert.equal(record.path, "/api/auth/callback/google");
   assert.equal(record.status, 302);
   assert.match(String(record.detail), /\[redacted\]/);
+});
+
+test("public share token paths never reach the log", () => {
+  const share = new URL("https://staging.example/s/A8GIWqW88MsJESALSRCzSfoPkyqnYEK8Mmw55FY6gNE");
+  assert.equal(requestLogPath(share), "/s/[redacted]");
+  assert.equal(requestLogPath(new URL("https://staging.example/api/health")), "/api/health");
 });
 
 test("requests carrying query values or credentials are not logged", () => {

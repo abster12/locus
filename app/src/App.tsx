@@ -57,7 +57,13 @@ function isHostedRoute(name: Route["name"]): boolean {
     name === "account" ||
     name === "collections" ||
     name === "collection" ||
-    name === "reading"
+    name === "reading" ||
+    name === "atlas" ||
+    name === "kitchen" ||
+    name === "kitchenItem" ||
+    name === "trips" ||
+    name === "tripsSetup" ||
+    name === "trip"
   );
 }
 
@@ -285,7 +291,7 @@ export function App() {
   const intakeSurface = isIntakeSurface(route.name);
 
   useEffect(() => {
-    if (RUNTIME === "hosted" || !ready || !libraryIdentity || !intakeSurface) {
+    if (!ready || !libraryIdentity || !intakeSurface) {
       setIntakeDrafts(null);
       return;
     }
@@ -346,7 +352,7 @@ export function App() {
               <path d="M12 3v3M12 18v3M3 12h3M18 12h3M12 8l1.8 4L12 16l-1.8-4z" />
             </svg>
             <span>{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
-            {RUNTIME !== "hosted" ? <a href={`#/summary/day/${today()}`}>Today’s summary</a> : null}
+            <a href={`#/summary/day/${today()}`}>Today’s summary</a>
           </div>
           <div className="mast-row">
             <label className="globalsearch">
@@ -420,19 +426,15 @@ export function App() {
             </span>
           ) : null}
         </Tab>
-        {RUNTIME !== "hosted" ? (
-          <>
-            <Tab href="#/kitchen" active={route.name === "kitchen" || route.name === "kitchenItem"}>
-              Kitchen
-            </Tab>
-            <Tab href="#/atlas" active={route.name === "atlas"}>
-              Atlas
-            </Tab>
-            <Tab href="#/trips" active={route.name === "trips" || route.name === "tripsSetup" || route.name === "trip"}>
-              Trips
-            </Tab>
-          </>
-        ) : null}
+        <Tab href="#/kitchen" active={route.name === "kitchen" || route.name === "kitchenItem"}>
+          Kitchen
+        </Tab>
+        <Tab href="#/atlas" active={route.name === "atlas"}>
+          Atlas
+        </Tab>
+        <Tab href="#/trips" active={route.name === "trips" || route.name === "tripsSetup" || route.name === "trip"}>
+          Trips
+        </Tab>
         <Tab href="#/reading" active={route.name === "reading"}>
           Reading
         </Tab>
@@ -456,13 +458,13 @@ export function App() {
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
       {route.name === "account" && (RUNTIME === "hosted" ? <HostedAccountPage /> : <SourcesPage />)}
       {route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
-      {RUNTIME !== "hosted" && route.name === "atlas" && <AtlasPage onOpen={openStage} />}
-      {RUNTIME !== "hosted" && route.name === "kitchen" && <KitchenPage />}
-      {RUNTIME !== "hosted" && route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}
-      {RUNTIME !== "hosted" && route.name === "trips" && <TripsPage mode="index" filter={route.filter} />}
-      {RUNTIME !== "hosted" && route.name === "tripsSetup" && <TripsPage mode="setup" />}
-      {RUNTIME !== "hosted" && route.name === "trip" && <TripsPage mode="document" tripId={route.id} documentView={route.view} />}
-      {RUNTIME !== "hosted" && route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
+      {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
+      {route.name === "kitchen" && <KitchenPage />}
+      {route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}
+      {route.name === "trips" && <TripsPage mode="index" filter={route.filter} />}
+      {route.name === "tripsSetup" && <TripsPage mode="setup" />}
+      {route.name === "trip" && <TripsPage mode="document" tripId={route.id} documentView={route.view} />}
+      {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
       {intakeDrafts ? (
         <IntakeDraftsSheet
           key={intakeDrafts.drafts.map((draft, index) => `${draft.item.url}:${index}`).join("|")}
@@ -600,22 +602,18 @@ function NewMenu() {
       </button>
       {open ? (
         <div id={menuId} className="new-menu" role="menu" aria-label="Start something new" onKeyDown={onMenuKeyDown}>
-          {RUNTIME !== "hosted" ? (
-            <a role="menuitem" href="#/trips/new" onClick={() => setOpen(false)}>
-              <b>Plan a trip</b>
-              <small>Create a durable Trip Document.</small>
-            </a>
-          ) : null}
+          <a role="menuitem" href="#/trips/new" onClick={() => setOpen(false)}>
+            <b>Plan a trip</b>
+            <small>Create a durable Trip Document.</small>
+          </a>
           <a role="menuitem" href="#/save" onClick={() => setOpen(false)}>
             <b>Save a link</b>
             <small>Capture an Item; readable sources appear in Reading.</small>
           </a>
-          {RUNTIME !== "hosted" ? (
-            <a role="menuitem" href="#/kitchen" onClick={() => setOpen(false)}>
-              <b>Make a saved dish cookable</b>
-              <small>Choose a Food Item and work on its Recipe Document in Kitchen.</small>
-            </a>
-          ) : null}
+          <a role="menuitem" href="#/kitchen" onClick={() => setOpen(false)}>
+            <b>Make a saved dish cookable</b>
+            <small>Choose a Food Item and work on its Recipe Document in Kitchen.</small>
+          </a>
         </div>
       ) : null}
     </div>

@@ -1105,7 +1105,7 @@ export interface LibraryCapability {
 }
 
 export interface AccountSourcesOverview {
-  account: { mode: "local" };
+  account: { mode: "local" | "hosted" };
   extension: ExtensionHealth;
   connections: SourceConnection[];
   imports: ImportSummary[];

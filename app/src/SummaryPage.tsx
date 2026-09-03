@@ -3,12 +3,14 @@ import { api, type SummarySnapshot } from "./api.ts";
 import { useProse } from "./use-prose.ts";
 export function SummaryPage({ scope, scopeRef }: { scope: "day" | "collection"; scopeRef: string }) {
   const [snap, setSnap] = useState<SummarySnapshot | null>(null);
+  const [pi, setPi] = useState<{ available: boolean; detail: string } | null>(null);
   const { prose, error: proseErr, busy, generate: generateProse } = useProse(scope, scopeRef);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     setErr(null);
     api.summary(scope, scopeRef).then((r) => {
       setSnap(r.snapshot);
+      setPi(r.pi);
     }).catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
   }, [scope, scopeRef]);
   const cited = useMemo(() => new Map(snap?.items.map((i) => [i.id, i]) ?? []), [snap]);
@@ -69,11 +71,13 @@ export function SummaryPage({ scope, scopeRef }: { scope: "day" | "collection"; 
         <h2>Write a summary</h2>
         <button
           className="btn copper"
-          disabled={busy}
+          disabled={busy || (pi !== null && !pi.available)}
+          title={pi && !pi.available ? pi.detail : undefined}
           onClick={() => void generateProse()}
         >
           Write summary
         </button>
+        {pi && !pi.available ? <p className="quiet">{pi.detail}</p> : null}
         {proseErr ? <p className="action-error" role="alert">{proseErr}</p> : null}
         {prose && <p className="prose">{prose}</p>}
       </article>

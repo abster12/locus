@@ -15,6 +15,7 @@
   "host_permissions": [
     "http://127.0.0.1/*",
     "http://localhost/*",
+    "https://*.workers.dev/*",
     "https://x.com/*",
     "https://twitter.com/*",
     "https://www.youtube.com/*",
