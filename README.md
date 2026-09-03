@@ -38,7 +38,11 @@ You can also sign in with Google and paste public URLs into your own private Lib
 
 ## From a save to something useful
 
-Locus accepts URLs directly and can capture saves from X, Instagram, YouTube, and Reddit through an optional Chrome extension. Capture runs in your browser, where you are already signed in. Locus does not ask for or store your social account passwords.
+There are three ways to fill the Library, in increasing order of setup:
+
+1. **Paste a URL.** Sign in and add any public link from your own Library.
+2. **Ask your browser agent.** Every page offers WebMCP tools (see below), so a browser agent can search the Library, draft Items, and plan Trips while you stay in control of what is applied.
+3. **Capture your saves with the optional extension.** The Chrome extension lives in this repository at [`extension/shell`](extension/shell) — it is not a store listing. It captures X Bookmarks, Instagram Saved, YouTube Watch Later, and Reddit Saved from your own signed-in browser. Load it once from `chrome://extensions` (Load unpacked), then click **Pair extension** on Account: if the extension is installed in the browser you are using, pairing completes by itself. Capture runs in your browser, where you are already signed in. Locus does not ask for or store your social account passwords. Setup details are in [docs/BUILD.md](docs/BUILD.md#extension).
 
 Once an Item reaches the Library, it can move through several parts of the same product:
 
