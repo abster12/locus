@@ -3,6 +3,46 @@ import { scanList, type CaptureContext, type PageContext, type Post, type SitePa
 
 // Runs inside the tab via evaluate(). Must stay self-contained (no module locals).
 function extractXCards(): Post[] {
+  const asUrl = (raw: string) => {
+    const t = (raw || "").trim();
+    if (/^https?:\/\//i.test(t)) return t;
+    if (/^www\./i.test(t)) return `https://${t}`;
+    if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}\//i.test(t)) return `https://${t}`;
+    return "";
+  };
+  const anchorUrl = (node: Element) => {
+    const titled = asUrl(node.getAttribute("title") || "");
+    if (titled) return titled;
+    const href = node.getAttribute("href") || "";
+    const fromHref = asUrl(href);
+    if (fromHref && !/t\.co\//i.test(href)) return fromHref;
+    let visible = "";
+    const walkA = (n: Node) => {
+      if (n.nodeType === 3) {
+        visible += n.textContent ?? "";
+        return;
+      }
+      if (n.nodeType !== 1) return;
+      const el = n as Element;
+      if (el.nodeName === "BR") return;
+      if (el.nodeName === "IMG") {
+        visible += el.getAttribute("alt") || "";
+        return;
+      }
+      for (const c of el.childNodes ?? []) walkA(c);
+    };
+    walkA(node);
+    return asUrl(visible.replace(/\s+/g, ""));
+  };
+  const joinWrappedUrls = (text: string) => {
+    let out = text;
+    let prev = "";
+    while (out !== prev) {
+      prev = out;
+      out = out.replace(/(https?:\/\/[^\s\n]+)\n([a-z0-9./?#&=_%~+-]+)/g, "$1$2");
+    }
+    return out;
+  };
   const tweetBody = (el: Element) => {
     const textEl = el.querySelector('[data-testid="tweetText"]');
     if (!textEl) return undefined;
@@ -16,17 +56,7 @@ function extractXCards(): Post[] {
       const node = n as Element;
       const tag = node.nodeName;
       if (tag === "A") {
-        const title = node.getAttribute("title") || "";
-        const href = node.getAttribute("href") || "";
-        if (/^https?:\/\//.test(title)) {
-          out += title;
-          return;
-        }
-        if (/^https?:\/\//.test(href) && !/t\.co\//.test(href)) {
-          out += href;
-          return;
-        }
-        out += (node as HTMLElement).innerText || "";
+        out += anchorUrl(node) || (node as HTMLElement).innerText || "";
         return;
       }
       if (tag === "IMG") {
@@ -40,13 +70,13 @@ function extractXCards(): Post[] {
       for (const c of node.childNodes) walk(c);
     };
     walk(textEl);
-    const body = out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    const body = joinWrappedUrls(out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim());
     return body || undefined;
   };
   const tweetLinks = (el: Element, selfId: string) => {
     const found: string[] = [];
     const add = (raw: string) => {
-      const u = raw.trim();
+      const u = asUrl(raw) || raw.trim();
       if (!/^https?:\/\//.test(u)) return;
       if (/(x|twitter)\.com\/(i|intent|share)\//i.test(u)) return;
       const quoted = u.match(/\/status\/(\d+)/)?.[1];
@@ -54,10 +84,8 @@ function extractXCards(): Post[] {
       if (!found.includes(u)) found.push(u);
     };
     for (const a of el.querySelectorAll("a")) {
-      const title = a.getAttribute("title") || "";
-      const href = a.getAttribute("href") || "";
-      if (/^https?:\/\//.test(title)) add(title);
-      if (/^https?:\/\//.test(href) && !/t\.co\//.test(href)) add(href);
+      const resolved = anchorUrl(a);
+      if (resolved) add(resolved);
     }
     if (found.length === 0) {
       const card = el.querySelector('[data-testid="card.wrapper"]');
