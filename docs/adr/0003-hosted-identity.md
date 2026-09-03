@@ -13,7 +13,7 @@ Hosted Locus authenticates with **Better Auth 1.7.2** (pinned) on a Cloudflare W
 - Access: `user_access.status` `active` | `disabled`. Disabled is `403` even with a valid session cookie.
 - Client runtime is an explicit `local` | `hosted` build. Hosted never falls back to `LOCAL_LIBRARY_ID`.
 
-Detail: `.scratch/hosted-identity/spec.md`. Effect remains excluded by ADR 0002.
+Detail: `.scratch/hosted-identity/spec.md`. Effect remains excluded by ADR 0002. Later domains follow ADR 0004 and `.scratch/hosted-deployment/spec.md`.
 
 ## Deviations from the 2026-09-01 spike
 

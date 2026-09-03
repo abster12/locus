@@ -10,6 +10,7 @@ import { usefulPreview, useLinkPreview } from "./link-preview.ts";
 import { CapturedMedia, Poster } from "./ItemVisuals.tsx";
 import { ClassificationWhy } from "./ClassificationWhy.tsx";
 import { localDay } from "../../core/dates.ts";
+import { RUNTIME } from "./runtime.ts";
 import { useProse } from "./use-prose.ts";
 function previewUrls(item: ItemCard): { text: string; links: string[] } {
   const extracted = extractLinks(item.body);
@@ -198,14 +199,16 @@ export function ItemList({
                   {s ? sourceLabel(s) : "All"}
                 </button>
               ))}
-              <button
-                className="chip copper autotag"
-                disabled={tagging}
-                title="Tag untagged saves"
-                onClick={autoTag}
-              >
-                {tagging ? "Tagging…" : "Auto-tag"}
-              </button>
+              {RUNTIME !== "hosted" ? (
+                <button
+                  className="chip copper autotag"
+                  disabled={tagging}
+                  title="Tag untagged saves"
+                  onClick={autoTag}
+                >
+                  {tagging ? "Tagging…" : "Auto-tag"}
+                </button>
+              ) : null}
             </div>
           </div>
           {activeShelf && (
@@ -366,7 +369,7 @@ function PostCard({
               {t.name}
             </button>
           ))}
-          {reading ? <ReadingSummary id={item.id} /> : null}
+          {RUNTIME !== "hosted" && reading ? <ReadingSummary id={item.id} /> : null}
         </div>
         <div className="acts">
           <button type="button" title="Accept" aria-label="Accept" disabled={busy || item.status === "accepted"} onClick={() => onStatus(item.id, "accepted")}>

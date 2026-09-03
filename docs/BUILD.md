@@ -11,6 +11,8 @@ npm run dev
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
+Hosted (Worker + D1 staging): `.scratch/hosted-deployment/spec.md`.
+
 Production:
 
 ```bash
@@ -32,10 +34,10 @@ Locus does not copy that profile.
 
 1. Chrome → Extensions → Load unpacked → `extension/shell`
 2. On Account, click **Pair extension**
-3. Paste origin + token into the popup
+3. Paste origin + token into the popup (localhost, or the hosted Worker URL)
 4. On a post, **Save this item**
 
-Host permission is requested only for the current site.
+Host permission is requested only for the current site. Hosted capture uses the same Load unpacked path from GitHub until a Chrome Web Store listing exists.
 
 ## Importers
 

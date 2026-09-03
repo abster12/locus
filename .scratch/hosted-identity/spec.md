@@ -9,7 +9,7 @@ Productionize the proven Google OAuth spike as the identity and ownership bounda
 
 A person can sign in with Google during open registration, receive exactly one private Library, restore that Library on later sessions, sign out, and access only resources belonging to that Library. Registration can be closed without preventing existing users from returning. Every hosted request derives `userId`, `sessionId`, and `libraryId` from the authenticated server-side session; ordinary clients never choose those values.
 
-This is the first production slice of the Cloudflare deployment. It does not port the existing Locus domains to D1.
+This is the identity slice of the Cloudflare deployment. Whole-app destination: ADR 0004 and `.scratch/hosted-deployment/spec.md`.
 
 ## Proven decision
 

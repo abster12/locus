@@ -39,7 +39,8 @@ function sessionPayload(): { status: number; body: unknown } {
   if (stub.mode === "fail") return { status: 500, body: { error: "Internal server error" } };
   if (stub.mode === "denied") return { status: 403, body: { error: "Forbidden" } };
   if (stub.mode === "expire") {
-    if (stub.calls === 1) {
+    // HostedApp loads the session, then App.boot() loads it again. Expire after both.
+    if (stub.calls <= 2) {
       return {
         status: 200,
         body: { ...hostedSession, session: { expiresAt: new Date(Date.now() + 400).toISOString() } },
@@ -82,6 +83,18 @@ function handle(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/api/auth/sign-out") {
     stub.mode = "signed-out";
     sendJson(res, 200, { success: true });
+    return;
+  }
+  if (url.pathname === "/api/items" || url.pathname === "/api/items/counts") {
+    sendJson(res, 200, {
+      items: [],
+      nextCursor: null,
+      counts: { total: 0, inbox: 0, shelves: {} },
+    });
+    return;
+  }
+  if (url.pathname === "/api/collections") {
+    sendJson(res, 200, { collections: [], tags: [] });
     return;
   }
   if (LOCAL_API.test(url.pathname)) {
@@ -155,11 +168,23 @@ test("signed-out hosted shell is Google only", async () => {
   }
 });
 
-test("signed-in hosted Account shows Google identity and no local sections", async () => {
+test("signed-in hosted App shows Desk and Google Account, not later tabs", async () => {
   resetStub("signed-in");
   const page = await openPage();
   try {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Desk"), { timeout: 5000 });
+    const desk = await page.evaluate(() => document.body.textContent ?? "");
+    assert.match(desk, /Desk/);
+    assert.doesNotMatch(desk, /Continue with Google/);
+    assert.doesNotMatch(desk, /Kitchen/);
+    assert.doesNotMatch(desk, /Atlas/);
+    assert.doesNotMatch(desk, /Trips/);
+    assert.doesNotMatch(desk, /Reading/);
+    assert.doesNotMatch(desk, /Capture setup/);
+    assert.doesNotMatch(desk, /Pair extension/);
+    assert.doesNotMatch(desk, /Connect/);
+    await page.goto(`${BASE}/#/account`, { waitUntil: "load" });
     await page.waitForSelector("#hosted-account", { timeout: 5000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
     assert.match(text, /Ada Lovelace/);
@@ -168,9 +193,6 @@ test("signed-in hosted Account shows Google identity and no local sections", asy
     assert.match(text, /Ada's Library/);
     assert.match(text, /Owner/);
     assert.match(text, /Sign out/);
-    assert.doesNotMatch(text, /Continue with Google/);
-    assert.doesNotMatch(text, /Desk/);
-    assert.doesNotMatch(text, /Kitchen/);
     assert.doesNotMatch(text, /Capture setup/);
     assert.doesNotMatch(text, /Pair extension/);
     assert.doesNotMatch(text, /Local account/);
@@ -184,7 +206,7 @@ test("sign-out returns to the Google entry without a reload", async () => {
   resetStub("signed-in");
   const page = await openPage();
   try {
-    await page.goto(`${BASE}/`, { waitUntil: "load" });
+    await page.goto(`${BASE}/#/account`, { waitUntil: "load" });
     await page.waitForSelector("#hosted-account", { timeout: 5000 });
     await page.click("#hosted-account .btn");
     await page.waitForSelector(".hosted-session .btn.primary", { timeout: 5000 });
@@ -202,7 +224,7 @@ test("an expired session returns to signed out", async () => {
   const page = await openPage();
   try {
     await page.goto(`${BASE}/`, { waitUntil: "load" });
-    await page.waitForSelector("#hosted-account", { timeout: 5000 });
+    await page.waitForFunction(() => (document.body.textContent ?? "").includes("Desk"), { timeout: 5000 });
     await page.waitForSelector(".hosted-session .btn.primary", { timeout: 8000 });
     const text = await page.evaluate(() => document.body.textContent ?? "");
     assert.doesNotMatch(text, /Ada Lovelace/);

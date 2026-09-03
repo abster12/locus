@@ -6,6 +6,7 @@ import { sourceLabel } from "./source-icons.ts";
 import { canMountLiveFrame } from "./stage-navigation.ts";
 import { useProse } from "./use-prose.ts";
 import { ClassificationWhy } from "./ClassificationWhy.tsx";
+import { RUNTIME } from "./runtime.ts";
 
 function today(): string {
   const d = new Date();
@@ -347,15 +348,17 @@ export function Stage({ item, startPage, onClose, onItemChange }: {
       )}
       <div className="stage-ai">
         <div className="stage-ai-row">
-          <button
-            type="button"
-            className="primary"
-            disabled={busy}
-            title="Summarize this save"
-            onClick={() => void generateProse()}
-          >
-            {busy ? "Summarizing…" : prose ? "Again" : "Summary"}
-          </button>
+          {RUNTIME !== "hosted" ? (
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              title="Summarize this save"
+              onClick={() => void generateProse()}
+            >
+              {busy ? "Summarizing…" : prose ? "Again" : "Summary"}
+            </button>
+          ) : null}
           <button type="button" onClick={() => setNoteOpen(true)}>
             {noteOpen || notes.length ? "Note" : "Add note"}
           </button>
@@ -423,8 +426,8 @@ export function Stage({ item, startPage, onClose, onItemChange }: {
           {organizationError ? <p className="action-error" role="alert">{organizationError}</p> : null}
           {organizationMessage ? <p className="action-ok" role="status">{organizationMessage}</p> : null}
         </div>
-        {proseErr ? <p className="action-error" role="alert">{proseErr}</p> : null}
-        {prose ? <p className="stage-prose">{prose}</p> : null}
+        {RUNTIME !== "hosted" && proseErr ? <p className="action-error" role="alert">{proseErr}</p> : null}
+        {RUNTIME !== "hosted" && prose ? <p className="stage-prose">{prose}</p> : null}
         {notes.map((n) => (
           <p key={n.id} className="stage-notes">
             {n.body}

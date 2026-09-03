@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { App } from "./App.tsx";
 import { setApiCsrf } from "./api.ts";
+import { HostedAuthContext } from "./hosted-auth.ts";
 import {
   consumeCallbackError,
   loadSession,
@@ -30,9 +32,6 @@ export function HostedApp() {
 
   useEffect(() => {
     if (session?.kind !== "hosted-ready") return;
-    if (location.hash !== "#/account") {
-      history.replaceState(null, "", `${location.pathname}${location.search}#/account`);
-    }
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
@@ -119,48 +118,15 @@ export function HostedApp() {
   if (session.kind !== "hosted-ready") return null;
 
   return (
-    <div className="shell hosted-session">
-      <header className="masthead">
-        <p className="wordmark">Locus</p>
-      </header>
-      {signOutFailed ? <p className="bad" role="alert">Could not sign out. Try again.</p> : null}
-      <HostedAccount session={session} onSignOut={() => void onSignOut()} />
-    </div>
-  );
-}
-
-function HostedAccount({
-  session,
-  onSignOut,
-}: {
-  session: Extract<SessionState, { kind: "hosted-ready" }>;
-  onSignOut: () => void;
-}) {
-  const { user, library } = session;
-  const initial = user.name.trim().slice(0, 1) || user.email.slice(0, 1).toUpperCase();
-  return (
-    <section className="stack">
-      <div className="pagehead">
-        <h1>Account</h1>
-      </div>
-      <div className="block" id="hosted-account">
-        <h2>Account</h2>
-        {user.image ? (
-          <img className="account-avatar" src={user.image} alt="" width={64} height={64} />
-        ) : (
-          <div className="account-avatar" aria-hidden="true">
-            {initial}
-          </div>
-        )}
-        <h3>{user.name}</h3>
-        <p>{user.email}</p>
-        <p>Signed in with Google</p>
-        <p>{library.name}</p>
-        <p>Owner</p>
-        <button type="button" className="btn" onClick={onSignOut}>
-          Sign out
-        </button>
-      </div>
-    </section>
+    <HostedAuthContext.Provider
+      value={{
+        user: session.user,
+        library: session.library,
+        signOut: () => void onSignOut(),
+        signOutFailed,
+      }}
+    >
+      <App />
+    </HostedAuthContext.Provider>
   );
 }

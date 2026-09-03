@@ -136,8 +136,8 @@ test("health and unknown routes", async () => {
   assert.deepEqual(health.body, { ok: true });
 
   const missing = await json(worker, MAIN_ORIGIN, "/api/items");
-  assert.equal(missing.res.status, 404);
-  assert.deepEqual(missing.body, { error: "Not found" });
+  assert.equal(missing.res.status, 401);
+  assert.deepEqual(missing.body, { error: "Unauthorized" });
   assert.match(missing.res.headers.get("content-type") ?? "", /json/);
 
   const unknownApi = await json(worker, MAIN_ORIGIN, "/api/does-not-exist");

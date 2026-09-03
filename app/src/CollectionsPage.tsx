@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Collection } from "./api.ts";
 import { notifyLibraryChanged } from "./library-events.ts";
+import { RUNTIME } from "./runtime.ts";
 export function CollectionsPage() {
   const [cols, setCols] = useState<Collection[]>([]);
   const [name, setName] = useState("");
@@ -40,11 +41,13 @@ export function CollectionsPage() {
           <a key={c.id} className="card src-neutral" href={`#/collections/${c.id}`}>
             <h3>{c.name}</h3>
             <p className="quiet">{c.count} items</p>
-            <p>
-              <a href={`#/summary/collection/${c.id}`} onClick={(e) => e.stopPropagation()}>
-                Summary
-              </a>
-            </p>
+            {RUNTIME !== "hosted" ? (
+              <p>
+                <a href={`#/summary/collection/${c.id}`} onClick={(e) => e.stopPropagation()}>
+                  Summary
+                </a>
+              </p>
+            ) : null}
           </a>
         ))}
       </div>

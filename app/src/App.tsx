@@ -22,8 +22,10 @@ import { attachLibraryIntakeWebmcp, type IntakeWebmcpHost } from "./library-inta
 import { SummaryPage } from "./SummaryPage.tsx";
 import { canMountLiveFrame, firstStageDestination } from "./stage-navigation.ts";
 import { localDay } from "../../core/dates.ts";
+import { HostedAccountPage } from "./hosted-account.tsx";
 import { LIBRARY_CHANGED_EVENT, notifyLibraryChanged } from "./library-events.ts";
 import { AUTHENTICATED_LIBRARY_CHANGED_EVENT, authenticatedLibraryFromEvent } from "./library-identity.ts";
+import { RUNTIME } from "./runtime.ts";
 
 type Route =
   | { name: "recent"; shelf: string }
@@ -44,6 +46,23 @@ type Route =
 
 function isIntakeSurface(name: Route["name"]): boolean {
   return name === "recent" || name === "inbox" || name === "search" || name === "collections" || name === "collection" || name === "save";
+}
+
+function isHostedRoute(name: Route["name"]): boolean {
+  return (
+    name === "recent" ||
+    name === "inbox" ||
+    name === "search" ||
+    name === "save" ||
+    name === "account" ||
+    name === "collections" ||
+    name === "collection"
+  );
+}
+
+function hostedRoute(route: Route): Route {
+  if (RUNTIME !== "hosted" || isHostedRoute(route.name)) return route;
+  return { name: "recent", shelf: "" };
 }
 
 function parseHash(): Route {
@@ -129,8 +148,8 @@ function applyTheme(theme: "light" | "dark"): void {
 }
 
 export function App() {
-  const initialRoute = parseHash();
-  const [route, setRoute] = useState<Route>(parseHash);
+  const initialRoute = hostedRoute(parseHash());
+  const [route, setRoute] = useState<Route>(() => hostedRoute(parseHash()));
   const [ready, setReady] = useState(false);
   const [libraryIdentity, setLibraryIdentity] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -149,7 +168,7 @@ export function App() {
   const openStage = async (item: ItemCard, page?: string) => {
     const request = ++stageOpenRequest.current;
     const dest = page ?? firstStageDestination(item);
-    if (!dest) {
+    if (!dest || RUNTIME === "hosted") {
       setStageItem(item);
       setStagePage(null);
       return;
@@ -189,11 +208,12 @@ export function App() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const onHash = () => setRoute(parseHash());
+    const onHash = () => setRoute(hostedRoute(parseHash()));
     const onAuthenticatedLibraryChange = (event: Event) => {
       const next = authenticatedLibraryFromEvent(event);
       if (next) setLibraryIdentity(next);
     };
+    if (RUNTIME === "hosted" && !isHostedRoute(parseHash().name)) replaceHash("#/recent");
     window.addEventListener("hashchange", onHash);
     window.addEventListener(AUTHENTICATED_LIBRARY_CHANGED_EVENT, onAuthenticatedLibraryChange);
     boot()
@@ -264,7 +284,7 @@ export function App() {
   const intakeSurface = isIntakeSurface(route.name);
 
   useEffect(() => {
-    if (!ready || !libraryIdentity || !intakeSurface) {
+    if (RUNTIME === "hosted" || !ready || !libraryIdentity || !intakeSurface) {
       setIntakeDrafts(null);
       return;
     }
@@ -325,7 +345,7 @@ export function App() {
               <path d="M12 3v3M12 18v3M3 12h3M18 12h3M12 8l1.8 4L12 16l-1.8-4z" />
             </svg>
             <span>{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</span>
-            <a href={`#/summary/day/${today()}`}>Today’s summary</a>
+            {RUNTIME !== "hosted" ? <a href={`#/summary/day/${today()}`}>Today’s summary</a> : null}
           </div>
           <div className="mast-row">
             <label className="globalsearch">
@@ -382,7 +402,7 @@ export function App() {
           </div>
         </div>
       </header>
-      <CaptureBanner />
+      {RUNTIME !== "hosted" ? <CaptureBanner /> : null}
       <nav className="tabs">
         <Tab href="#/recent" active={deskActive}>
           Desk
@@ -399,18 +419,22 @@ export function App() {
             </span>
           ) : null}
         </Tab>
-        <Tab href="#/kitchen" active={route.name === "kitchen" || route.name === "kitchenItem"}>
-          Kitchen
-        </Tab>
-        <Tab href="#/atlas" active={route.name === "atlas"}>
-          Atlas
-        </Tab>
-        <Tab href="#/trips" active={route.name === "trips" || route.name === "tripsSetup" || route.name === "trip"}>
-          Trips
-        </Tab>
-        <Tab href="#/reading" active={route.name === "reading"}>
-          Reading
-        </Tab>
+        {RUNTIME !== "hosted" ? (
+          <>
+            <Tab href="#/kitchen" active={route.name === "kitchen" || route.name === "kitchenItem"}>
+              Kitchen
+            </Tab>
+            <Tab href="#/atlas" active={route.name === "atlas"}>
+              Atlas
+            </Tab>
+            <Tab href="#/trips" active={route.name === "trips" || route.name === "tripsSetup" || route.name === "trip"}>
+              Trips
+            </Tab>
+            <Tab href="#/reading" active={route.name === "reading"}>
+              Reading
+            </Tab>
+          </>
+        ) : null}
         <Tab href="#/account" active={route.name === "account"}>
           Account
         </Tab>
@@ -429,15 +453,15 @@ export function App() {
       {route.name === "search" && <ItemList view="search" initialQ={route.q} onOpen={openStage} />}
       {route.name === "collections" && <CollectionsPage />}
       {route.name === "collection" && <ItemList view="collection" collectionId={route.id} onOpen={openStage} />}
-      {route.name === "account" && <SourcesPage />}
-      {route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
-      {route.name === "atlas" && <AtlasPage onOpen={openStage} />}
-      {route.name === "kitchen" && <KitchenPage />}
-      {route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}
-      {route.name === "trips" && <TripsPage mode="index" filter={route.filter} />}
-      {route.name === "tripsSetup" && <TripsPage mode="setup" />}
-      {route.name === "trip" && <TripsPage mode="document" tripId={route.id} documentView={route.view} />}
-      {route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
+      {route.name === "account" && (RUNTIME === "hosted" ? <HostedAccountPage /> : <SourcesPage />)}
+      {RUNTIME !== "hosted" && route.name === "reading" && <ReadingPage key={libraryIdentity} libraryIdentity={libraryIdentity} />}
+      {RUNTIME !== "hosted" && route.name === "atlas" && <AtlasPage onOpen={openStage} />}
+      {RUNTIME !== "hosted" && route.name === "kitchen" && <KitchenPage />}
+      {RUNTIME !== "hosted" && route.name === "kitchenItem" && <KitchenDetail itemId={route.id} mode={route.mode} />}
+      {RUNTIME !== "hosted" && route.name === "trips" && <TripsPage mode="index" filter={route.filter} />}
+      {RUNTIME !== "hosted" && route.name === "tripsSetup" && <TripsPage mode="setup" />}
+      {RUNTIME !== "hosted" && route.name === "trip" && <TripsPage mode="document" tripId={route.id} documentView={route.view} />}
+      {RUNTIME !== "hosted" && route.name === "summary" && <SummaryPage scope={route.scope} scopeRef={route.ref} />}
       {intakeDrafts ? (
         <IntakeDraftsSheet
           key={intakeDrafts.drafts.map((draft, index) => `${draft.item.url}:${index}`).join("|")}
@@ -575,18 +599,22 @@ function NewMenu() {
       </button>
       {open ? (
         <div id={menuId} className="new-menu" role="menu" aria-label="Start something new" onKeyDown={onMenuKeyDown}>
-          <a role="menuitem" href="#/trips/new" onClick={() => setOpen(false)}>
-            <b>Plan a trip</b>
-            <small>Create a durable Trip Document.</small>
-          </a>
+          {RUNTIME !== "hosted" ? (
+            <a role="menuitem" href="#/trips/new" onClick={() => setOpen(false)}>
+              <b>Plan a trip</b>
+              <small>Create a durable Trip Document.</small>
+            </a>
+          ) : null}
           <a role="menuitem" href="#/save" onClick={() => setOpen(false)}>
             <b>Save a link</b>
             <small>Capture an Item; readable sources appear in Reading.</small>
           </a>
-          <a role="menuitem" href="#/kitchen" onClick={() => setOpen(false)}>
-            <b>Make a saved dish cookable</b>
-            <small>Choose a Food Item and work on its Recipe Document in Kitchen.</small>
-          </a>
+          {RUNTIME !== "hosted" ? (
+            <a role="menuitem" href="#/kitchen" onClick={() => setOpen(false)}>
+              <b>Make a saved dish cookable</b>
+              <small>Choose a Food Item and work on its Recipe Document in Kitchen.</small>
+            </a>
+          ) : null}
         </div>
       ) : null}
     </div>
