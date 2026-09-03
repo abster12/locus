@@ -191,6 +191,33 @@ export async function getLibraryItem(db: D1Database, libraryId: string, id: stri
   return row ? hydrate(db, row) : null;
 }
 
+/** Load many Item cards in a few queries. Atlas/Kitchen projections cannot call getLibraryItem per row. */
+export async function getLibraryItems(
+  db: D1Database,
+  libraryId: string,
+  ids: string[],
+): Promise<Map<string, ItemCard>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const out = new Map<string, ItemCard>();
+  if (unique.length === 0) return out;
+  const rows: ItemRow[] = [];
+  for (const chunk of chunkIds(unique, 40)) {
+    rows.push(
+      ...(await all<ItemRow>(
+        db,
+        `${ITEM_SELECT} WHERE i.library_id = ? AND i.id IN (${chunk.map(() => "?").join(",")})`,
+        libraryId,
+        ...chunk,
+      )),
+    );
+  }
+  const tags = await loadTagsForItems(db, unique);
+  for (const row of rows) {
+    out.set(row.id, itemCardFrom(row, tags.get(row.id) ?? [], [], [], []));
+  }
+  return out;
+}
+
 export async function listItemsPage(
   db: D1Database,
   libraryId: string,
@@ -552,6 +579,16 @@ async function hydrate(db: D1Database, row: ItemRow): Promise<ItemCard> {
       row.id,
     ),
   ]);
+  return itemCardFrom(row, tags, collections, notes, await loadClassifications(db, row.id));
+}
+
+function itemCardFrom(
+  row: ItemRow,
+  tags: { id: string; name: string; color: string | null }[],
+  collections: { id: string; name: string }[],
+  notes: { id: string; body: string; createdAt: string }[],
+  classifications: ItemCard["classifications"],
+): ItemCard {
   const item = {
     sourceSavedAt: row.source_saved_at,
     firstObservedAt: row.first_observed_at,
@@ -579,8 +616,36 @@ async function hydrate(db: D1Database, row: ItemRow): Promise<ItemCard> {
     notes,
     dateLabel: dateLabel(item),
     intakeActor: row.intake_actor === "user" || row.intake_actor === "agent" ? row.intake_actor : null,
-    classifications: await loadClassifications(db, row.id),
+    classifications,
   };
+}
+
+async function loadTagsForItems(
+  db: D1Database,
+  ids: string[],
+): Promise<Map<string, { id: string; name: string; color: string | null }[]>> {
+  const out = new Map<string, { id: string; name: string; color: string | null }[]>();
+  for (const id of ids) out.set(id, []);
+  for (const chunk of chunkIds(ids, 40)) {
+    const rows = await all<{ item_id: string; id: string; name: string; color: string | null }>(
+      db,
+      `SELECT m.item_id, t.id, t.name, t.color FROM memberships m JOIN tags t ON t.id = m.target_id
+        WHERE m.target_kind = 'tag' AND m.item_id IN (${chunk.map(() => "?").join(",")})
+        ORDER BY t.name`,
+      ...chunk,
+    );
+    for (const row of rows) {
+      const list = out.get(row.item_id);
+      if (list) list.push({ id: row.id, name: row.name, color: row.color });
+    }
+  }
+  return out;
+}
+
+function chunkIds(ids: string[], size: number): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
 }
 
 async function loadClassifications(

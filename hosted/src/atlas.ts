@@ -19,7 +19,7 @@ import {
   type DestinationCandidate,
   type PlaceKind,
 } from "../../server/atlas/policy.ts";
-import { MissingResource, getLibraryItem, nowIso, type ItemCard } from "./desk.ts";
+import { MissingResource, getLibraryItem, getLibraryItems, nowIso, type ItemCard } from "./desk.ts";
 import { all, first, inMarks, run } from "./sql.ts";
 
 export class AtlasConflict extends Error {
@@ -116,11 +116,13 @@ export async function getAtlasProjection(db: D1Database, libraryId: string): Pro
   const home = homeId && byId.has(homeId) ? viewPlace(byId.get(homeId)!, byId) : null;
   const assignments = await loadAssignments(db, libraryId);
   const assigned = new Set(assignments.map((row) => row.item_id));
+  const travelIds = await travelItemIds(db, libraryId);
+  const items = await getLibraryItems(db, libraryId, [...assigned, ...travelIds]);
   const cards: AtlasCard[] = [];
   const review: ReviewRow[] = [];
   const multiple: AtlasCard[] = [];
   for (const row of assignments) {
-    const item = presentItem(await getLibraryItem(db, libraryId, row.item_id));
+    const item = presentItem(items.get(row.item_id) ?? null);
     if (!item) continue;
     const view = viewAssignment(row, item, byId);
     if (row.outcome === "not_atlas") continue;
@@ -128,9 +130,9 @@ export async function getAtlasProjection(db: D1Database, libraryId: string): Pro
     else if (row.outcome === "multiple") multiple.push({ item, assignment: view });
     else cards.push({ item, assignment: view });
   }
-  for (const itemId of await travelItemIds(db, libraryId)) {
+  for (const itemId of travelIds) {
     if (assigned.has(itemId)) continue;
-    const item = presentItem(await getLibraryItem(db, libraryId, itemId));
+    const item = presentItem(items.get(itemId) ?? null);
     if (item) review.push({ item, assignment: null });
   }
   review.sort(compareReview);
