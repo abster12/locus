@@ -35,7 +35,7 @@ Locus does not copy that profile.
 
 1. Chrome → Extensions → Load unpacked → `extension/shell`
 2. On Account, click **Pair extension**
-3. Paste origin + token into the popup (localhost, or the hosted Worker URL)
+3. If the extension is installed in this browser, it pairs by itself — no copy-paste. The pairing code only appears when no extension replies: paste it into the extension popup on the browser that has the extension, or on a desk URL the manifest does not cover (localhost and the hosted Worker are covered).
 4. On a post, **Save this item**
 
 Host permission is requested only for the current site. Hosted capture uses the same Load unpacked path from GitHub until a Chrome Web Store listing exists.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type ExtensionHealth, type ImportResult, type ImportSummary, type LibraryCapability, type LibraryCapabilityScope, type SourceConnection, type SourceConnectionState } from "./api.ts";
+import { pairViaExtension } from "./extension-pair.ts";
 import { SourceMark } from "./SourceMark.tsx";
 import { notifyLibraryChanged } from "./library-events.ts";
 import { RUNTIME } from "./runtime.ts";
@@ -78,6 +79,7 @@ export function SourcesPage() {
   const [copied, setCopied] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
+  const [autoPaired, setAutoPaired] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -148,8 +150,18 @@ export function SourcesPage() {
     setPairBusy(true);
     setPairError(null);
     setCopied(false);
+    setAutoPaired(false);
     try {
-      setPair(await api.pairExtension());
+      const issued = await api.pairExtension();
+      // The extension on this page's origin can store the pairing itself. When
+      // none answers (not installed, other browser, unlisted desk URL), fall
+      // back to the copy-paste code.
+      if (await pairViaExtension(window, issued.token)) {
+        setPair(null);
+        setAutoPaired(true);
+      } else {
+        setPair(issued);
+      }
     } catch (e) {
       setPairError(`${e instanceof Error ? e.message : String(e)} Copy the pairing code once it appears, then paste it into the extension.`);
     } finally {
@@ -258,10 +270,14 @@ export function SourcesPage() {
             </button>
           )}
         </div>
+        {autoPaired ? <p role="status">Paired with the extension in this browser.</p> : null}
         {pair ? (
           <>
             <label htmlFor="pairing-code">Pairing code</label>
             <textarea id="pairing-code" className="source-pair-code" readOnly value={pairingText} />
+            <p className="quiet">
+              No extension replied in this browser. Paste this code into the Locus extension popup on the browser where the extension is installed.
+            </p>
             <button
               type="button"
               className="btn"

@@ -3,6 +3,7 @@
 //   - implements CaptureContext with chrome.tabs / chrome.scripting
 //   - talks Capture Protocol to the desk (sessions, batches)
 import { packFor, packForUrl } from "./pack.js";
+import { verifyPairing } from "./pairing.js";
 
 let listening = false;
 chrome.runtime.onInstalled.addListener(() => {
@@ -24,6 +25,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     runSaveItem(msg)
       .then((text) => sendResponse({ ok: true, text }))
       .catch((e) => sendResponse({ ok: false, text: e instanceof Error ? e.message : String(e) }));
+    return true;
+  }
+  if (msg?.type === "locus-pair") {
+    // Auto-pair from the desk page (relayed by content.js).
+    verifyPairing({ origin: msg.origin, token: msg.token, storage: chrome.storage.local })
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     return true;
   }
 });
